@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Catatrace — annotation de galeries</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside id="side">
+  <header>
+    <h1>Catatrace</h1>
+    <p class="sub">Suivi manuel de galeries → données d'entraînement</p>
+  </header>
+
+  <section>
+    <h2>Carte</h2>
+    <select id="mapSelect"><option value="">— choisir une carte —</option></select>
+    <label class="file">Ouvrir une image locale… <input type="file" id="mapFile" accept="image/*"></label>
+    <div id="mapInfo" class="muted">Aucune carte chargée.</div>
+  </section>
+
+  <section>
+    <h2>Paramètres</h2>
+    <label class="row">Fenêtre (px carte) <input type="number" id="winSize" min="32" max="4096" step="16" value="256"></label>
+    <label class="row"><input type="checkbox" id="allowOutside"> Autoriser un point hors fenêtre</label>
+    <label class="row"><input type="checkbox" id="showOrder" checked> Numéroter les points</label>
+    <label class="row">Projet <input type="text" id="projName" placeholder="nom du projet"></label>
+  </section>
+
+  <section>
+    <h2>État</h2>
+    <div id="status" class="status">Chargez une carte puis cliquez pour poser le point de départ.</div>
+    <div id="stats" class="stats"></div>
+  </section>
+
+  <section>
+    <h2>Actions</h2>
+    <div class="btns">
+      <button id="btnKind" title="I ou Maj+clic / clic droit">Prochain point : <b>normal</b></button>
+      <button id="btnAdvance" title="Espace">Point suivant <kbd>Espace</kbd></button>
+      <button id="btnEnd" title="F">Fin de branche <kbd>F</kbd></button>
+      <button id="btnRetype" title="T">Changer le type du point courant <kbd>T</kbd></button>
+      <button id="btnUndo" title="Ctrl+Z">Annuler <kbd>Ctrl+Z</kbd></button>
+      <button id="btnCenter" title="C">Recentrer <kbd>C</kbd></button>
+      <button id="btnFinish">Terminer la session</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Fenêtre vue par le modèle</h2>
+    <canvas id="crop" width="220" height="220"></canvas>
+    <div class="muted small" id="cropInfo"></div>
+  </section>
+
+  <section>
+    <h2>Branches en attente <span id="queueCount" class="pill">0</span></h2>
+    <ol id="queue" class="list"></ol>
+  </section>
+
+  <section>
+    <h2>Journal</h2>
+    <ol id="log" class="list log"></ol>
+  </section>
+
+  <section>
+    <h2>Données</h2>
+    <div class="btns">
+      <button id="btnExport">Exporter le projet (JSON)</button>
+      <label class="file btn">Importer un projet… <input type="file" id="importFile" accept="application/json"></label>
+      <button id="btnReset" class="danger">Réinitialiser le projet</button>
+    </div>
+    <p class="muted small">Sauvegarde automatique dans le navigateur. Les crops d'entraînement se génèrent avec <code>tools/export_dataset.py</code> à partir du JSON.</p>
+  </section>
+
+  <section class="help">
+    <h2>Règles</h2>
+    <ul>
+      <li>Clic : pose un point sur la galerie, le plus loin possible sans traverser de mur.</li>
+      <li>Point <b>normal</b> : une seule suite → la vue saute sur le nouveau point.</li>
+      <li>Point <b>intersection</b> (Maj+clic, clic droit ou <kbd>I</kbd>) : posez une amorce par branche, puis <kbd>Espace</kbd>.</li>
+      <li><kbd>F</kbd> : cul-de-sac → passe à la branche en attente suivante, sinon retour au départ.</li>
+      <li>Clic sur un point existant : jonction (zone déjà cartographiée), termine la branche.</li>
+      <li>Molette : zoom · glisser : déplacer la vue · <kbd>C</kbd> : recentrer.</li>
+    </ul>
+  </section>
+</aside>
+<main id="main">
+  <canvas id="view"></canvas>
+  <div id="hud"></div>
+  <div id="drop">Déposez une image de carte ici</div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
