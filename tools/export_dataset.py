@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transforme un projet Catatrace (JSON exporté par l'app) en jeu d'entraînement.
+"""Transforme un projet MapTracer (JSON exporté par l'app) en jeu d'entraînement.
 
 Pour chaque *décision* (passage sur un point courant), on produit :
   - crops/<n>.png : image carrée de la carte centrée sur le point courant (taille --window, défaut : celle de l'annotation) ;
@@ -8,7 +8,7 @@ Pour chaque *décision* (passage sur un point courant), on produit :
     et l'action terminale (continue / end / join).
 Le JSON exporté contient aussi le graphe complet (points, segments) → graph.geojson si la carte est géoréférencée.
 
-Exemple : python3 tools/export_dataset.py mon_projet.catatrace.json maps/nexus_alkhemia_2011.jpg -o dataset/ --window 256
+Exemple : python3 tools/export_dataset.py mon_projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o dataset/ --window 256
 """
 import argparse, json, os
 from PIL import Image
@@ -80,7 +80,7 @@ def main():
     a = ap.parse_args()
 
     proj = json.load(open(a.project, encoding='utf-8'))
-    assert proj.get('format') == 'catatrace/1', 'format inattendu'
+    assert proj.get('format') == 'maptracer/1', 'format inattendu'
     pts, decisions = replay(proj['events'])
     img = Image.open(a.image).convert('RGB')
     if proj.get('map') and (img.width, img.height) != (proj['map']['width'], proj['map']['height']):

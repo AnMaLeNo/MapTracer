@@ -1,16 +1,16 @@
-/* Catatrace — annotation pas-à-pas de galeries pour constituer un jeu d'entraînement.
+/* MapTracer — annotation pas-à-pas de galeries pour constituer un jeu d'entraînement.
    Source de vérité : la liste ordonnée `events` (replay → état dérivé). Annuler = retirer le dernier événement. */
 'use strict';
 
 const $ = id => document.getElementById(id);
-const FORMAT = 'catatrace/1';
+const FORMAT = 'maptracer/1';
 
 /* ---------- persistance (IndexedDB) ---------- */
 const idb = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('catatrace', 1);
+      const r = indexedDB.open('maptracer', 1);
       r.onupgradeneeded = () => r.result.createObjectStore('kv');
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -343,7 +343,7 @@ function exportJSON() {
   }
   const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = `${(project.name || (project.map && project.map.id) || 'catatrace').replace(/[^\w.-]+/g, '_')}.catatrace.json`;
+  a.download = `${(project.name || (project.map && project.map.id) || 'maptracer').replace(/[^\w.-]+/g, '_')}.maptracer.json`;
   a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 $('btnExport').onclick = exportJSON;

@@ -1,4 +1,4 @@
-# Catatrace
+# MapTracer
 
 Outil d'annotation pour vectoriser une carte de galeries (catacombes de Paris, Nexus 2011…) **pas à pas**, et produire le
 jeu de données qui servira à entraîner un modèle de suivi de galeries assisté par IA.
@@ -40,11 +40,11 @@ posteriori à l'export (seule la séquence ordonnée des points compte).
 
 ## Format des données
 
-### Projet (`*.catatrace.json`)
+### Projet (`*.maptracer.json`)
 
 ```jsonc
 {
-  "format": "catatrace/1",
+  "format": "maptracer/1",
   "name": "...",
   "map": { "id": "nexus_alkhemia_2011", "width": 6307, "height": 6307, "hash": "…", "georef": { "lon": [a, b], "lat": [a, b] } },
   "settings": { "window": 256, "allowOutside": false },
@@ -64,7 +64,7 @@ triviale et garantit que l'ordre exact des décisions est conservé.
 
 ```bash
 pip install pillow
-python3 tools/export_dataset.py mon_projet.catatrace.json maps/nexus_alkhemia_2011.jpg -o dataset/ --window 256 [--size 224]
+python3 tools/export_dataset.py mon_projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o dataset/ --window 256 [--size 224]
 ```
 
 Produit `dataset/crops/NNNNNN.png` et `dataset/samples.jsonl`, une ligne par décision :
