@@ -258,12 +258,29 @@ def clip_graph(g, bbox):
     return c
 
 
-def default_seed(ref):
-    """Nœud de degré 2 le plus central du graphe de référence (zone de validation sans point de départ)."""
-    xs = [p['x'] for p in ref.nodes.values()]; ys = [p['y'] for p in ref.nodes.values()]
+def default_seed(ref, nodes=None):
+    """Nœud de degré 2 le plus central parmi `nodes` (défaut : tout le graphe de référence)."""
+    nodes = list(nodes) if nodes is not None else list(ref.nodes)
+    xs = [ref.nodes[n]['x'] for n in nodes]; ys = [ref.nodes[n]['y'] for n in nodes]
     cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    cands = [n for n in ref.nodes if ref.degree(n) == 2] or list(ref.nodes)
+    cands = [n for n in nodes if ref.degree(n) == 2] or nodes
     return min(cands, key=lambda n: math.dist(ref.xy(n), (cx, cy)))
+
+
+def components(ref):
+    """Composantes connexes (listes de nœuds) comptant au moins une arête."""
+    seen, comps = set(), []
+    for s in ref.nodes:
+        if s in seen or ref.degree(s) == 0:
+            continue
+        comp, stack = [], [s]; seen.add(s)
+        while stack:
+            n = stack.pop(); comp.append(n)
+            for m in ref.adj[n]:
+                if m not in seen:
+                    seen.add(m); stack.append(m)
+        comps.append(comp)
+    return comps
 
 
 def compare(ref, out, tol):
@@ -311,7 +328,8 @@ def main():
     ap.add_argument('--side-sep', type=float, default=20, help='écart min (°) entre la continuation et une direction latérale')
     ap.add_argument('--confirm', type=int, default=2, help='observations consécutives avant d’ouvrir une branche latérale')
     ap.add_argument('--coast', type=int, default=2, help='pas tout droit tolérés sans réponse avant de conclure à une fin')
-    ap.add_argument('--seed', action='append', help='x,y[,cap_deg] (répétable ; défaut : point de départ du projet)')
+    ap.add_argument('--seed', action='append', help="x,y[,cap_deg] (répétable ; défaut : point de départ du projet) "
+                    "ou 'auto' : un départ par composante connexe de la référence (utile avec --bbox)")
     ap.add_argument('--noise-deg', type=float, default=0.0, help='bruit gaussien sur les directions de l’oracle')
     ap.add_argument('--drop', type=float, default=0.0, help='probabilité d’oublier une direction (oracle)')
     ap.add_argument('--snap', type=float, help='oracle : distance max à l’axe avant d’être « perdu » (défaut 2×pas)')
@@ -323,14 +341,13 @@ def main():
     rng = random.Random(args.rng)
 
     proj = G.load_project(args.project)
-    ref = G.graph_from_project(proj)
+    ref_full = G.graph_from_project(proj)
     img = Image.open(args.image).convert('RGB')
     bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else None
-    if bbox:
-        ref = clip_graph(ref, bbox)
+    ref = clip_graph(ref_full, bbox) if bbox else ref_full
     trace_width = 3
     if args.model == 'oracle':
-        model = OracleModel(ref, args.step, L, args.sectors, args.snap or 2 * args.step, args.noise_deg, args.drop, rng)
+        model = OracleModel(ref_full, args.step, L, args.sectors, args.snap or 2 * args.step, args.noise_deg, args.drop, rng)
     else:
         if LearnedModel is None:
             raise SystemExit('PyTorch est requis pour un modèle appris (pip install torch torchvision)')
@@ -345,10 +362,13 @@ def main():
 
     seeds = []
     for s in args.seed or []:
+        if s == 'auto':
+            seeds += [(*ref.xy(default_seed(ref, c)), None) for c in components(ref)]
+            continue
         v = [float(t) for t in s.split(',')]
         seeds.append((v[0], v[1], math.radians(v[2]) if len(v) > 2 else None))
     if not seeds:
-        st = next((n for n, p in ref.nodes.items() if p['kind'] == 'start'), None)
+        st = next((n for n, p in ref.nodes.items() if p['kind'] == 'start' and ref.degree(n) > 0), None)
         if st is None:
             st = default_seed(ref)
         seeds.append((*ref.xy(st), None))

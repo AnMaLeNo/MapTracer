@@ -110,9 +110,7 @@ class Graph:
 
         def walk(u, v, used):          # au nœud u, on part vers v ; `used` = distance déjà parcourue
             d = self.length(u, v)
-            if d <= 0:
-                return
-            if used + d >= L:
+            if used + d >= L and d > 0:
                 x, y = self.lerp(u, v, (L - used) / d)
                 out.append({'x': x, 'y': y, 'dist': L, 'dead': False}); return
             nxt = [w for w in self.adj[v] if w != u]
@@ -121,7 +119,7 @@ class Graph:
             for w in nxt:
                 walk(v, w, used + d)
 
-        if rem_edge >= L:
+        if rem_edge >= L and rem_edge > 0:
             x, y = self.lerp(a, b, t + L / self.length(a, b))
             out.append({'x': x, 'y': y, 'dist': L, 'dead': False})
         else:
