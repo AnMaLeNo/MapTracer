@@ -46,7 +46,9 @@ def make_sample(g, img, a, b, t, args, rng, perturb):
     dh = math.radians(rng.uniform(-args.heading_noise, args.heading_noise)) if perturb else 0.0
     px = ax - math.sin(heading0) * off; py = ay + math.cos(heading0) * off     # décalage latéral (droite = +)
     heading = heading0 + dh
-    angles, pts = G.oracle_directions(g, a, b, t, px, py, heading, args.lookahead, args.step)
+    angles, pts = G.oracle_directions(g, a, b, t, px, py, heading, args.lookahead, args.step, skip_open=True)
+    if angles is None:
+        return None
     W = args.window
     crop = G.crop_rotated(img, px, py, heading, W)
     segs, extra = g.traced_edges_behind(a, b, t, W, rng, L=args.lookahead)
@@ -99,11 +101,14 @@ def main():
         os.makedirs(os.path.join(args.out, 'trace'), exist_ok=True)
     f_tr = open(os.path.join(args.out, 'samples.jsonl'), 'w', encoding='utf-8')
     f_va = open(os.path.join(args.out, 'samples_val.jsonl'), 'w', encoding='utf-8') if hold else None
-    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0}
+    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0, 'skipped_open': 0}
     i = 0
     for a, b, t in iter_states(g, args.spacing, rng):
         for k in range(1 + args.aug):
-            crop, traced, row = make_sample(g, img, a, b, t, args, rng, perturb=k > 0)
+            smp = make_sample(g, img, a, b, t, args, rng, perturb=k > 0)
+            if smp is None:
+                n['skipped_open'] += 1; continue
+            crop, traced, row = smp
             row['sample'] = i
             if not args.no_images:
                 name = f'{i:06d}.png'
@@ -123,7 +128,7 @@ def main():
               open(os.path.join(args.out, 'meta.json'), 'w'), indent=1, ensure_ascii=False)
     json.dump(g.to_dict(), open(os.path.join(args.out, 'graph.json'), 'w'))
     print(f"{i} exemples (train {n['train']}, val {n['val']}) ; {n['end']} fins, {n['multi']} multi-directions ; "
-          f"graphe {g.total_length():.0f} px, {len(g.edges)} arêtes → {args.out}/")
+          f"{n['skipped_open']} états ignorés (amorces en attente) ; graphe {g.total_length():.0f} px, {len(g.edges)} arêtes → {args.out}/")
 
 
 if __name__ == '__main__':

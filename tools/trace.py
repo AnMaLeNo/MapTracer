@@ -23,6 +23,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 from PIL import Image, ImageDraw
 import mt_graph as G
+try:
+    from model import LearnedModel
+except ImportError:                     # torch absent : seul le faux modèle oracle est disponible
+    LearnedModel = None
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -60,8 +64,10 @@ class OracleModel:
 
 class Tracer:
     def __init__(self, model, step, K, thr=0.5, img=None, window=128, trace_width=3, map_size=None,
-                 max_steps=200000, max_branch_steps=20000, side_sep_deg=20, confirm=2, coast=2, grace=2, verbose=False):
+                 max_steps=200000, max_branch_steps=20000, side_sep_deg=20, confirm=2, coast=2, grace=2, verbose=False,
+                 bounds=None):
         self.model, self.step, self.K, self.thr = model, step, K, thr
+        self.bounds = bounds        # (x0, y0, x1, y1) : le suivi s'arrête en sortant de la zone
         self.img, self.W, self.trace_width, self.map_size = img, window, trace_width, map_size
         self.max_steps, self.max_branch_steps = max_steps, max_branch_steps
         self.side_sep, self.confirm, self.coast, self.grace, self.verbose = math.radians(side_sep_deg), confirm, coast, grace, verbose
@@ -80,27 +86,7 @@ class Tracer:
                 G.render_traced(segs, x, y, heading, self.W, self.trace_width))
 
     def peaks(self, probs):
-        """Composantes connexes circulaires de secteurs > seuil → [(angle relatif rad, score)]."""
-        K = self.K; act = [p >= self.thr for p in probs]
-        if all(act):
-            return [(0.0, max(probs))]
-        start = act.index(False)
-        res, i = [], 0
-        while i < K:
-            k = (start + i) % K
-            if act[k]:
-                comp = []
-                while act[(start + i) % K] and i < K:
-                    comp.append((start + i) % K); i += 1
-                ws = [probs[c] for c in comp]
-                k0 = comp[0]
-                ang = sum((k0 + j) * w for j, w in enumerate(ws)) / sum(ws)     # indices consécutifs (non modulo)
-                a = (ang % K) * 2 * math.pi / K
-                res.append(((a + math.pi) % (2 * math.pi) - math.pi, max(ws)))
-            else:
-                i += 1
-        return res
-
+        return G.peaks(probs, self.K, self.thr)
     # ---- graphe de sortie -----------------------------------------------------------------------------------------
     def has_edge_toward(self, node, angle, radius, tol=None):
         tol = 0.75 * self.side_sep if tol is None else tol
@@ -216,6 +202,8 @@ class Tracer:
             self.steps += 1; n_steps += 1
             if self.map_size and not (0 <= nx < self.map_size[0] and 0 <= ny < self.map_size[1]):
                 reason = 'out_of_map'; break
+            if self.bounds and not (self.bounds[0] <= nx <= self.bounds[2] and self.bounds[1] <= ny <= self.bounds[3]):
+                reason = 'out_of_zone'; break
             j = self.junction(nx, ny, node, hist)
             if j is not None:
                 reason = 'junction'; break
@@ -256,6 +244,45 @@ def dist_to_segments(P, g):
     return out
 
 
+def clip_graph(g, bbox):
+    """Sous-graphe des nœuds dans bbox (x0,y0,x1,y1) ; les arêtes coupant la frontière sont perdues."""
+    x0, y0, x1, y1 = bbox
+    c = G.Graph()
+    keep = {n for n, p in g.nodes.items() if x0 <= p['x'] <= x1 and y0 <= p['y'] <= y1}
+    for n in keep:
+        c.add_node(*g.xy(n), g.nodes[n]['kind'], n)
+    for a, b in g.edges:
+        if a in keep and b in keep:
+            c.add_edge(a, b)
+    c.open = {n for n in g.open if n in keep}
+    return c
+
+
+def default_seed(ref, nodes=None):
+    """Nœud de degré 2 le plus central parmi `nodes` (défaut : tout le graphe de référence)."""
+    nodes = list(nodes) if nodes is not None else list(ref.nodes)
+    xs = [ref.nodes[n]['x'] for n in nodes]; ys = [ref.nodes[n]['y'] for n in nodes]
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    cands = [n for n in nodes if ref.degree(n) == 2] or nodes
+    return min(cands, key=lambda n: math.dist(ref.xy(n), (cx, cy)))
+
+
+def components(ref):
+    """Composantes connexes (listes de nœuds) comptant au moins une arête."""
+    seen, comps = set(), []
+    for s in ref.nodes:
+        if s in seen or ref.degree(s) == 0:
+            continue
+        comp, stack = [], [s]; seen.add(s)
+        while stack:
+            n = stack.pop(); comp.append(n)
+            for m in ref.adj[n]:
+                if m not in seen:
+                    seen.add(m); stack.append(m)
+        comps.append(comp)
+    return comps
+
+
 def compare(ref, out, tol):
     Pr, Po = sample_edges(ref), sample_edges(out)
     cov = float((dist_to_segments(Pr, out) <= tol).mean()) if len(Pr) else 0.0
@@ -292,14 +319,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('project'); ap.add_argument('image')
     ap.add_argument('-o', '--out', default='trace_out')
-    ap.add_argument('--model', default='oracle', help="'oracle' (faux modèle lu dans le tracé manuel)")
+    ap.add_argument('--model', default='oracle', help="'oracle' (faux modèle lu dans le tracé manuel) ou chemin d’un model.pt de train.py")
+    ap.add_argument('--bbox', help='x0,y0,x1,y1 : limiter le suivi et la comparaison à cette zone (ex. zone de validation)')
+    ap.add_argument('--device', help='cuda / cpu pour le modèle appris')
     ap.add_argument('--step', type=float, default=4); ap.add_argument('--lookahead', type=float, help='défaut 4×pas')
     ap.add_argument('--sectors', type=int, default=32); ap.add_argument('--window', type=int, default=128)
     ap.add_argument('--thr', type=float, default=0.5, help='seuil d’activation d’un secteur')
     ap.add_argument('--side-sep', type=float, default=20, help='écart min (°) entre la continuation et une direction latérale')
     ap.add_argument('--confirm', type=int, default=2, help='observations consécutives avant d’ouvrir une branche latérale')
     ap.add_argument('--coast', type=int, default=2, help='pas tout droit tolérés sans réponse avant de conclure à une fin')
-    ap.add_argument('--seed', action='append', help='x,y[,cap_deg] (répétable ; défaut : point de départ du projet)')
+    ap.add_argument('--seed', action='append', help="x,y[,cap_deg] (répétable ; défaut : point de départ du projet) "
+                    "ou 'auto' : un départ par composante connexe de la référence (utile avec --bbox)")
     ap.add_argument('--noise-deg', type=float, default=0.0, help='bruit gaussien sur les directions de l’oracle')
     ap.add_argument('--drop', type=float, default=0.0, help='probabilité d’oublier une direction (oracle)')
     ap.add_argument('--snap', type=float, help='oracle : distance max à l’axe avant d’être « perdu » (défaut 2×pas)')
@@ -311,20 +341,36 @@ def main():
     rng = random.Random(args.rng)
 
     proj = G.load_project(args.project)
-    ref = G.graph_from_project(proj)
+    ref_full = G.graph_from_project(proj)
     img = Image.open(args.image).convert('RGB')
-    if args.model != 'oracle':
-        raise SystemExit("seul --model oracle est disponible pour l’instant (le modèle appris viendra ensuite)")
-    model = OracleModel(ref, args.step, L, args.sectors, args.snap or 2 * args.step, args.noise_deg, args.drop, rng)
-    tr = Tracer(model, args.step, args.sectors, args.thr, img, args.window, map_size=img.size, coast=args.coast,
-                side_sep_deg=args.side_sep, confirm=args.confirm, verbose=args.verbose)
+    bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else None
+    ref = clip_graph(ref_full, bbox) if bbox else ref_full
+    trace_width = 3
+    if args.model == 'oracle':
+        model = OracleModel(ref_full, args.step, L, args.sectors, args.snap or 2 * args.step, args.noise_deg, args.drop, rng)
+    else:
+        if LearnedModel is None:
+            raise SystemExit('PyTorch est requis pour un modèle appris (pip install torch torchvision)')
+        model = LearnedModel(args.model, args.device)
+        mt = model.meta
+        args.step, args.sectors, args.window, trace_width = mt['step'], mt['sectors'], mt['window'], mt['trace_width']
+        L = mt['lookahead']
+        print(f"modèle {args.model} : fenêtre {args.window}, pas {args.step}, {args.sectors} secteurs, "
+              f"époque {mt.get('epoch')}, appareil {model.device}")
+    tr = Tracer(model, args.step, args.sectors, args.thr, img, args.window, trace_width=trace_width, map_size=img.size,
+                coast=args.coast, side_sep_deg=args.side_sep, confirm=args.confirm, verbose=args.verbose, bounds=bbox)
 
     seeds = []
     for s in args.seed or []:
+        if s == 'auto':
+            seeds += [(*ref.xy(default_seed(ref, c)), None) for c in components(ref)]
+            continue
         v = [float(t) for t in s.split(',')]
         seeds.append((v[0], v[1], math.radians(v[2]) if len(v) > 2 else None))
     if not seeds:
-        st = next((n for n, p in ref.nodes.items() if p['kind'] == 'start'), next(iter(ref.nodes)))
+        st = next((n for n, p in ref.nodes.items() if p['kind'] == 'start' and ref.degree(n) > 0), None)
+        if st is None:
+            st = default_seed(ref)
         seeds.append((*ref.xy(st), None))
     for x, y, h in seeds:
         tr.seed(x, y, h)
