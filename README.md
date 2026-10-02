@@ -114,6 +114,10 @@ l'arête derrière la position, parfois d'autres arêtes déjà explorées (le m
 Sortie : `map/NNNNNN.png`, `trace/NNNNNN.png`, `samples.jsonl` (+ `samples_val.jsonl` si `--holdout`, découpage **spatial**),
 `meta.json`, `graph.json`.
 
+Une extrémité de degré 1 **sans** événement `end` (amorce encore en file d'attente, point de départ) n'est pas un
+cul-de-sac : la galerie continue probablement. Les états dont la visée atteint une telle extrémité sont **ignorés** (compteur
+`skipped_open`) plutôt que d'enseigner une fausse fin.
+
 ### Boucle de suivi avec faux modèle
 
 ```bash
@@ -124,7 +128,8 @@ python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o tra
 branche par secteur latéral confirmé (`--confirm` observations), raccord au tracé existant (jonction, insertion d'un nœud sur
 une arête), arrêt quand aucun secteur n'est actif (`--coast` pas tolérés), sortie de carte. Pour l'instant le seul modèle
 est l'**oracle** (`--model oracle`), qui lit les directions dans le tracé manuel et peut être dégradé (`--noise-deg`,
-`--drop`) pour tester la robustesse de la boucle. Elle écrit `trace_graph.json` (+ `.geojson`), `report.json` (couverture,
+`--drop`) pour tester la robustesse de la boucle ; `--model chemin/model.pt` branche le modèle appris (ci-dessous) et
+`--bbox x0,y0,x1,y1` limite le suivi et la comparaison à une zone (la zone de validation). Elle écrit `trace_graph.json` (+ `.geojson`), `report.json` (couverture,
 précision, intersections retrouvées, raisons de fin des branches) et `debug.png` (bleu = référence, rouge = tracé).
 
 Vérification sur une carte synthétique (`tools/make_synth.py synth.png synth.maptracer.json` : galeries à double trait,
@@ -133,10 +138,25 @@ intersections, boucle, jonction, cul-de-sac, texte et trait parasites) : oracle 
 Ce sont des tests de **mécanique**, pas une validation du futur modèle : les jonctions créent parfois de courtes arêtes
 doublons, et la politique de confiance/rejet d'un modèle appris reste à définir.
 
-## Pistes pour le modèle (hors périmètre de cet outil)
+## Modèle appris (`tools/model.py`, `tools/train.py`)
 
-- Encodeur de vision pré-entraîné (ResNet-18/ConvNeXt) à 4 canaux (RGB + canal « déjà tracé »), tête sigmoïde à 32 sorties
-  (une par secteur, perte BCE sur les étiquettes douces) ; `end` = aucun secteur au-dessus du seuil.
-- Augmentations déjà faites par l'oracle (décalage, erreur de cap) ; en plus, variations de contraste et de taille de fenêtre.
-- Validation sur un secteur entier de carte (`--holdout`), métriques de `trace.py` (couverture, précision, intersections) en
-  branchant le modèle à la place de l'oracle ; définir le seuil de confiance et la politique de rejet avant tout usage.
+Dépendances : `pip install torch torchvision` (le reste de l'outil n'en a pas besoin).
+
+- **Réseau** : ResNet-18 pré-entraîné ImageNet, première convolution élargie à **4 canaux** (RGB carte + canal « déjà
+  tracé », 4ᵉ canal initialisé par la moyenne des poids RGB), couche finale remplacée par une linéaire à **32 sorties**.
+  Sigmoïde par sortie → une probabilité par direction (0–100 %) ; `end` ⇔ aucune sortie ≥ seuil. **Tout le réseau est
+  entraîné** (fine-tuning complet, AdamW + OneCycle, perte BCE sur les étiquettes douces de l'oracle).
+- **Augmentations** : miroir gauche↔droite (étiquette miroir), gigue de luminosité/contraste ; décalage et erreur de cap
+  viennent déjà de l'oracle.
+
+```bash
+python3 tools/train.py oracle/ -o runs/v1 --epochs 15 --bs 64 --lr 3e-4          # → runs/v1/model.pt, history.json
+python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o trace_v1/ \
+        --model runs/v1/model.pt --bbox x0,y0,x1,y1                                # suivi réel sur la zone de validation
+```
+
+Métriques de validation (à chaque époque, sur `samples_val.jsonl`) : les secteurs actifs sont regroupés en directions comme
+dans `trace.py` et appariés aux directions cibles à ±17° → précision/rappel/F1 des directions, exactitude des cul-de-sac,
+rappel aux intersections, erreur angulaire moyenne. Le meilleur F1 est sauvegardé. La vraie mesure reste `trace.py`
+(couverture, précision, intersections) sur une zone jamais vue.
+

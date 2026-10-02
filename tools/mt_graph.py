@@ -18,6 +18,7 @@ class Graph:
     def __init__(self):
         self.nodes = {}      # id -> {'x','y','kind'}
         self.adj = {}        # id -> set(id)
+        self.open = set()    # extrémités de degré 1 jamais terminées (amorces en attente) : pas des cul-de-sac
         self.next_id = 1
 
     # ---- construction -------------------------------------------------------------------------------------------
@@ -116,7 +117,7 @@ class Graph:
                 out.append({'x': x, 'y': y, 'dist': L, 'dead': False}); return
             nxt = [w for w in self.adj[v] if w != u]
             if not nxt:
-                x, y = self.xy(v); out.append({'x': x, 'y': y, 'dist': used + d, 'dead': True}); return
+                x, y = self.xy(v); out.append({'x': x, 'y': y, 'dist': used + d, 'dead': True, 'open': v in self.open}); return
             for w in nxt:
                 walk(v, w, used + d)
 
@@ -126,7 +127,7 @@ class Graph:
         else:
             nxt = [w for w in self.adj[b] if w != a]
             if not nxt:
-                x, y = self.xy(b); out.append({'x': x, 'y': y, 'dist': rem_edge, 'dead': True})
+                x, y = self.xy(b); out.append({'x': x, 'y': y, 'dist': rem_edge, 'dead': True, 'open': b in self.open})
             for w in nxt:
                 walk(b, w, rem_edge)
         # dédoublonne (boucles très courtes)
@@ -235,7 +236,8 @@ def graph_from_project(proj):
     for d in decisions:
         if d.get('join_to') is not None:
             g.add_edge(d['point'], d['join_to'])
-    # retire les nœuds isolés (amorces jamais reliées : impossible en pratique, mais sûr)
+    ended = {d['point'] for d in decisions if d['terminal'] == 'end'}
+    g.open = {n for n in g.nodes if g.degree(n) == 1 and n not in ended}
     return g
 
 
@@ -300,13 +302,41 @@ def render_traced(segs, px, py, heading, W, width):
     return im
 
 
-def oracle_directions(g, a, b, t, px, py, heading, L, step):
+def oracle_directions(g, a, b, t, px, py, heading, L, step, skip_open=False):
     """Directions cibles (angles relatifs, rad) depuis la position réelle (px,py) avec cap `heading`,
-    pour un état de référence « sur l'axe » à la position t de l'arête a→b. Renvoie (angles, points)."""
+    pour un état de référence « sur l'axe » à la position t de l'arête a→b. Renvoie (angles, points).
+
+    Une extrémité « ouverte » (amorce jamais terminée) n'est pas un cul-de-sac : la galerie continue probablement.
+    Avec skip_open, l'état est inexploitable comme exemple → (None, None) ; sinon elle compte comme une direction."""
     pts = g.lookahead(a, b, t, L, step)
+    if skip_open and any(q['dead'] and q.get('open') for q in pts):
+        return None, None
     angles, keep = [], []
     for q in pts:
-        if q['dead'] and q['dist'] < step:
+        if q['dead'] and q['dist'] < step and not q.get('open'):
             continue
         angles.append(rel_angle(px, py, heading, q['x'], q['y'])); keep.append(q)
     return angles, keep
+
+
+def peaks(probs, K, thr):
+    """Composantes connexes circulaires de secteurs > seuil → [(angle relatif rad, score)]."""
+    act = [p >= thr for p in probs]
+    if all(act):
+        return [(0.0, max(probs))]
+    start = act.index(False)
+    res, i = [], 0
+    while i < K:
+        k = (start + i) % K
+        if act[k]:
+            comp = []
+            while act[(start + i) % K] and i < K:
+                comp.append((start + i) % K); i += 1
+            ws = [probs[c] for c in comp]
+            k0 = comp[0]
+            ang = sum((k0 + j) * w for j, w in enumerate(ws)) / sum(ws)     # indices consécutifs (non modulo)
+            a = (ang % K) * 2 * math.pi / K
+            res.append(((a + math.pi) % (2 * math.pi) - math.pi, max(ws)))
+        else:
+            i += 1
+    return res
