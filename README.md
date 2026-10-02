@@ -26,7 +26,8 @@ exportable en JSON.
 | Point courant **intersection** ou **départ** | clics | pose une amorce par direction possible (plusieurs points) |
 | idem | `Espace` | passe sur la première amorce ; les autres vont dans la file d'attente |
 | Cul-de-sac | `F` | termine la branche → prochaine branche en attente, sinon retour au départ |
-| Zone déjà cartographiée | clic sur un point existant | **jonction** : relie et termine la branche |
+| Zone déjà cartographiée | clic sur un point existant | **jonction** : relie et termine la branche ; si ce point était `normal`, il devient une intersection |
+| Zone déjà cartographiée, intersection oubliée | clic sur un **segment** existant | insère une intersection à cet endroit (le segment est coupé en deux), puis jonction |
 | Poser une intersection | `Maj+clic`, clic droit ou `I` puis clic | le nouveau point est de type intersection |
 | Erreur | `Ctrl+Z` | annule le dernier événement (illimité) |
 | Changer le type du point courant | `T` | normal ↔ intersection (tant qu'il n'a pas de suite) |
@@ -51,7 +52,9 @@ posteriori à l'export (seule la séquence ordonnée des points compte).
   "events": [                       // source de vérité, dans l'ordre
     { "t": "start", "id": 1, "x": 2500, "y": 3300, "ts": 0 },
     { "t": "place", "id": 2, "from": 1, "x": 2560, "y": 3310, "kind": "normal", "window": 256 },
-    { "t": "advance" }, { "t": "end" }, { "t": "join", "to": 7 }, { "t": "retype", "id": 9, "kind": "intersection" }, { "t": "finish" }
+    { "t": "advance" }, { "t": "end" }, { "t": "join", "to": 7, "retype": true }, { "t": "retype", "id": 9, "kind": "intersection" },
+    { "t": "split", "id": 12, "from": 4, "to": 5, "x": 2480, "y": 3290 },   // coupe l'arête 4→5 et s'y raccorde
+    { "t": "finish" }
   ],
   "derived": { "points": [...], "edges": [...], "visits": [...] }   // commodité, recalculable depuis events
 }

@@ -60,6 +60,21 @@ def replay(events):
             d['terminal'] = 'continue' if t == 'advance' else ('end' if t == 'end' else 'join')
             if t == 'join':
                 d['join_to'] = ev['to']
+                if ev.get('retype'):
+                    pts[ev['to']]['kind'] = 'intersection'
+            if d['window'] is None:
+                d['window'] = w
+            advance(w)
+        elif t == 'split':
+            add(ev['id'], ev['x'], ev['y'], 'intersection', ev['from'])
+            visited.add(ev['id'])
+            children[ev['id']] = [ev['to']]
+            pts[ev['to']]['parent'] = ev['id']
+            sib = children[ev['from']]
+            if ev['to'] in sib:
+                sib[sib.index(ev['to'])] = ev['id']
+            d = open_dec[st['cur']]
+            d['terminal'] = 'join'; d['join_to'] = ev['id']
             if d['window'] is None:
                 d['window'] = w
             advance(w)

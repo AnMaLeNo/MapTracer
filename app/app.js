@@ -32,6 +32,7 @@ let D = derive([]);       // état dérivé
 let nextKind = 'normal';  // type du prochain point posé
 let hover = null;         // {x,y} coordonnées carte sous la souris
 let snapId = null;        // point existant sous la souris (jonction)
+let snapEdge = null;      // {from,to,x,y} arête sous la souris (jonction par insertion d'intersection)
 
 /* ---------- dérivation de l'état depuis le journal ---------- */
 function derive(events) {
@@ -62,7 +63,21 @@ function derive(events) {
       case 'end': S.terminal[S.current] = 'end'; advance(); break;
       case 'join':
         S.edges.push({ from: S.current, to: ev.to, kind: 'join' });
+        if (ev.retype) S.points[ev.to].kind = 'intersection';
         S.terminal[S.current] = 'join:' + ev.to; advance(); break;
+      case 'split': {       // insère une intersection au milieu d'une arête, puis s'y raccorde
+        const e = S.edges.find(x => x.from === ev.from && x.to === ev.to);
+        addPoint(ev.id, ev.x, ev.y, 'intersection', ev.from);
+        S.visited.add(ev.id);
+        S.children[ev.id] = [ev.to];
+        S.points[ev.to].parent = ev.id;
+        const sib = S.children[ev.from], i = sib.indexOf(ev.to);
+        if (i >= 0) sib[i] = ev.id;
+        if (e) { e.to = ev.id; S.edges.push({ from: ev.id, to: ev.to, kind: e.kind }); }
+        S.edges.push({ from: S.current, to: ev.id, kind: 'join' });
+        S.terminal[S.current] = 'join:' + ev.id;
+        advance(); break;
+      }
       case 'retype': S.points[ev.id].kind = ev.kind; break;
       case 'finish': S.done = true; break;
     }
@@ -94,7 +109,13 @@ function joinTo(id) {
   if (!c || D.done || id === c.id) return;
   if (D.edges.some(e => (e.from === c.id && e.to === id) || (e.from === id && e.to === c.id))) return warn('Déjà relié à ce point.');
   if (isBranching(c) && unvisitedChildren(c.id).length) return warn('Validez d’abord les amorces posées (Espace).');
-  push({ t: 'join', to: id, window: project.settings.window });
+  push({ t: 'join', to: id, retype: D.points[id].kind === 'normal', window: project.settings.window });
+}
+function splitEdge(s) {
+  const c = cur();
+  if (!c || D.done) return;
+  if (isBranching(c) && unvisitedChildren(c.id).length) return warn('Validez d’abord les amorces posées (Espace).');
+  push({ t: 'split', id: D.nextId, from: s.from, to: s.to, x: Math.round(s.x), y: Math.round(s.y), window: project.settings.window });
 }
 function doAdvance() {
   const c = cur(); if (!c || D.done) return;
@@ -173,11 +194,20 @@ function draw() {
   ctx.setLineDash([]);
   // aperçu du segment en cours
   if (c && hover && !D.done) {
-    const ok = snapId != null || project.settings.allowOutside || inWindow(hover.x, hover.y);
-    const t = snapId != null ? D.points[snapId] : hover;
+    const ok = snapId != null || snapEdge || project.settings.allowOutside || inWindow(hover.x, hover.y);
+    const t = snapId != null ? D.points[snapId] : snapEdge || hover;
     const [x0, y0] = toScreen(c.x, c.y), [x1, y1] = toScreen(t.x, t.y);
-    ctx.strokeStyle = ok ? (snapId != null ? '#39c47c' : 'rgba(255,255,255,.7)') : 'rgba(255,77,77,.8)';
+    ctx.strokeStyle = ok ? (snapId != null ? '#39c47c' : snapEdge ? '#ff7a1a' : 'rgba(255,255,255,.7)') : 'rgba(255,77,77,.8)';
     ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); ctx.setLineDash([]);
+    if (snapEdge) {
+      const a = D.points[snapEdge.from], b = D.points[snapEdge.to];
+      const [ax, ay] = toScreen(a.x, a.y), [bx, by] = toScreen(b.x, b.y);
+      ctx.strokeStyle = 'rgba(255,122,26,.7)'; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x1, y1, 9, 0, 7); ctx.stroke();
+      ctx.lineWidth = Math.max(1.5, Math.min(4, view.s * 1.2));
+    }
   }
   // points
   const r = Math.max(3, Math.min(7, view.s * 1.5));
@@ -236,9 +266,24 @@ window.addEventListener('mousemove', e => {
     if (Math.hypot(dx, dy) > 4) drag.moved = true;
     if (drag.moved) { view.cx = drag.cx - dx / view.s; view.cy = drag.cy - dy / view.s; }
   }
-  snapId = null;
+  snapId = null; snapEdge = null;
   const thr = 10 / view.s; let best = thr;
   for (const id of D.order) { const p = D.points[id]; const d = Math.hypot(p.x - mx, p.y - my); if (d < best && id !== D.current) { best = d; snapId = id; } }
+  if (snapId == null && cur() && !D.done) {
+    let bestE = 8 / view.s, gap = 4 / view.s;
+    for (const e of D.edges) {
+      if (e.kind !== 'trace' || e.from === D.current || e.to === D.current) continue;
+      const a = D.points[e.from], b = D.points[e.to];
+      const vx = b.x - a.x, vy = b.y - a.y, L2 = vx * vx + vy * vy;
+      if (!L2) continue;
+      const t = Math.max(0, Math.min(1, ((mx - a.x) * vx + (my - a.y) * vy) / L2));
+      const px = a.x + t * vx, py = a.y + t * vy;
+      const d = Math.hypot(px - mx, py - my);
+      if (d < bestE && Math.hypot(px - a.x, py - a.y) > gap && Math.hypot(px - b.x, py - b.y) > gap) {
+        bestE = d; snapEdge = { from: e.from, to: e.to, x: px, y: py };
+      }
+    }
+  }
   $('hud').textContent = img ? `x ${Math.round(mx)}  y ${Math.round(my)}  ·  zoom ×${view.s.toFixed(2)}` : '';
   dirty = true;
 });
@@ -247,6 +292,7 @@ window.addEventListener('mouseup', e => {
   const d = drag; drag = null;
   if (d.moved || e.target !== canvas) return;
   if (snapId != null) { joinTo(snapId); return; }
+  if (snapEdge) { splitEdge(snapEdge); return; }
   const kind = (e.button === 2 || e.shiftKey) ? 'intersection' : nextKind;
   placePoint(hover.x, hover.y, kind);
 });
@@ -285,7 +331,7 @@ function updateUI() {
   else if (isBranching(c)) {
     const n = unvisitedChildren(c.id).length;
     st.textContent = `${c.kind === 'start' ? 'Point de départ' : 'Intersection'} n°${c.order} : posez une amorce par direction (${n} posée${n > 1 ? 's' : ''}), puis Espace. F si aucune direction.`;
-  } else st.textContent = `Point normal n°${c.order} : cliquez le point suivant (Maj/clic droit = intersection), F = cul-de-sac, clic sur un point = jonction.`;
+  } else st.textContent = `Point normal n°${c.order} : cliquez le point suivant (Maj/clic droit = intersection), F = cul-de-sac, clic sur un point ou un segment = jonction.`;
   if (!st.classList.contains('warn')) st.classList.remove('warn');
   const nInter = D.order.filter(id => D.points[id].kind === 'intersection').length;
   const len = D.edges.reduce((s, e) => { const a = D.points[e.from], b = D.points[e.to]; return s + Math.hypot(a.x - b.x, a.y - b.y); }, 0);
@@ -300,13 +346,14 @@ function updateUI() {
   $('btnFinish').disabled = !c || D.done;
   $('queueCount').textContent = D.queue.length;
   $('queue').innerHTML = D.queue.map(id => { const p = D.points[id]; return `<li data-id="${id}">n°${p.order} (${p.kind}) — ${p.x}, ${p.y}</li>`; }).join('');
-  const names = { start: 'départ', place: 'point', advance: 'suivant', end: 'cul-de-sac', join: 'jonction', retype: 'type', finish: 'fin de session' };
+  const names = { start: 'départ', place: 'point', advance: 'suivant', end: 'cul-de-sac', join: 'jonction', split: 'jonction sur segment', retype: 'type', finish: 'fin de session' };
   $('log').innerHTML = project.events.slice(-25).reverse().map((ev, i) => {
     const n = project.events.length - i - 1;
     let d = names[ev.t] || ev.t;
     if (ev.t === 'place') d += ` ${ev.kind} (${ev.x}, ${ev.y}) ← ${D.points[ev.from] ? 'n°' + D.points[ev.from].order : ''}`;
     if (ev.t === 'start') d += ` (${ev.x}, ${ev.y})`;
-    if (ev.t === 'join') d += ` → n°${D.points[ev.to] ? D.points[ev.to].order : '?'}`;
+    if (ev.t === 'join') d += ` → n°${D.points[ev.to] ? D.points[ev.to].order : '?'}${ev.retype ? ' (→ intersection)' : ''}`;
+    if (ev.t === 'split') d += ` → nouvelle intersection (${ev.x}, ${ev.y})`;
     if (ev.t === 'retype') d += ` → ${ev.kind}`;
     return `<li>#${n} ${d}</li>`;
   }).join('');
@@ -316,6 +363,7 @@ $('queue').addEventListener('click', e => { const li = e.target.closest('li'); i
 let saveTimer = null;
 function refresh(save) {
   D = derive(project.events);
+  snapId = null; snapEdge = null;
   const c = cur();
   if (c && (save || !img)) recenter();
   updateUI(); dirty = true;
