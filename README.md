@@ -34,7 +34,7 @@ exportable en JSON.
 | Fin complète | « Terminer la session » | marque le projet comme achevé |
 
 Un point se pose **le plus loin possible sur la galerie sans que le segment traverse un mur** (virage, changement de
-direction, suivi d'une courbe). Par défaut un point hors de la fenêtre est refusé, puisque le modèle ne le verrait pas.
+direction, suivi d'une courbe). La fenêtre n'est qu'un repère visuel (le modèle final avance à pas fixe) ; l'option « hors fenêtre » permet de la rendre bloquante.
 
 La taille de la fenêtre est réglable à tout moment ; elle est enregistrée avec chaque événement et peut être changée a
 posteriori à l'export (seule la séquence ordonnée des points compte).
@@ -89,10 +89,54 @@ Entrée du modèle : le crop + `current`, `previous`, `context`. Sortie attendue
 `end`/`join`. Si la carte est géoréférencée, `graph.geojson` (WGS84) est aussi écrit pour superposer le tracé dans
 [catacombes](https://github.com/AnMaLeNo/catacombes).
 
+## Pipeline « oracle » : pas fixe, 32 directions, canal « déjà tracé » (`tools/oracle.py`, `tools/trace.py`)
+
+Le tracé manuel sert de **vérité** ; le modèle appris n'imite pas les clics mais apprend une politique locale :
+
+- **Entrée** : fenêtre carrée de la carte centrée sur la position courante, **tournée pour que le cap pointe vers le haut**,
+  plus un canal monochrome des **galeries déjà tracées**.
+- **Sortie** : `K = 32` secteurs angulaires (secteur 0 = tout droit, sens horaire), **multi-label** : chaque secteur a sa
+  propre probabilité, plusieurs secteurs actifs ⇔ intersection, **aucun secteur actif ⇔ cul-de-sac**.
+- **Déplacement** : toujours du même **pas fixe** (`--step`, 4 px ≈ 2 m sur Nexus), aucune largeur à estimer.
+
+### Génération des exemples
+
+```bash
+python3 tools/oracle.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --window 128 --step 4 \
+        [--aug 2 --offset 3 --heading-noise 25 --holdout x0,y0,x1,y1]
+```
+
+Pour chaque arête du graphe, dans les deux sens, une position tous les `--spacing` px (défaut = pas), dupliquée `--aug`
+fois avec un décalage latéral (`--offset`) et une erreur de cap (`--heading-noise`) pour apprendre le recentrage. La cible
+est l'ensemble des secteurs contenant un point de l'axe à `--lookahead` px (défaut 4 × pas) le long du graphe, une branche =
+un secteur (étiquettes douces gaussiennes dans `label`, secteurs entiers dans `sectors`). Le canal « déjà tracé » contient
+l'arête derrière la position, parfois d'autres arêtes déjà explorées (le modèle doit savoir ne pas repartir dessus).
+Sortie : `map/NNNNNN.png`, `trace/NNNNNN.png`, `samples.jsonl` (+ `samples_val.jsonl` si `--holdout`, découpage **spatial**),
+`meta.json`, `graph.json`.
+
+### Boucle de suivi avec faux modèle
+
+```bash
+python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o trace/ --step 4 [--noise-deg 8 --drop 0.05]
+```
+
+`trace.py` est la boucle qui exploitera le modèle appris : pas fixe, suivi du secteur le plus proche du cap, ouverture d'une
+branche par secteur latéral confirmé (`--confirm` observations), raccord au tracé existant (jonction, insertion d'un nœud sur
+une arête), arrêt quand aucun secteur n'est actif (`--coast` pas tolérés), sortie de carte. Pour l'instant le seul modèle
+est l'**oracle** (`--model oracle`), qui lit les directions dans le tracé manuel et peut être dégradé (`--noise-deg`,
+`--drop`) pour tester la robustesse de la boucle. Elle écrit `trace_graph.json` (+ `.geojson`), `report.json` (couverture,
+précision, intersections retrouvées, raisons de fin des branches) et `debug.png` (bleu = référence, rouge = tracé).
+
+Vérification sur une carte synthétique (`tools/make_synth.py synth.png synth.maptracer.json` : galeries à double trait,
+intersections, boucle, jonction, cul-de-sac, texte et trait parasites) : oracle exact → couverture 99,9 %, précision 100 %,
+4/4 intersections ; oracle bruité (8°, 5 % de directions oubliées, 5 graines) → couverture 95–100 %, précision 100 %.
+Ce sont des tests de **mécanique**, pas une validation du futur modèle : les jonctions créent parfois de courtes arêtes
+doublons, et la politique de confiance/rejet d'un modèle appris reste à définir.
+
 ## Pistes pour le modèle (hors périmètre de cet outil)
 
-- Tête de régression/heatmap sur un backbone de vision pré-entraîné (ConvNeXt/ViT), entrée = crop + canal « points posés »,
-  sortie = heatmap du prochain point + classe (normal / intersection / fin) ; pour les intersections, prédire une heatmap
-  multi-pics puis extraire les k maxima.
-- Augmentations : rotations par 90°, miroirs (en transformant les coordonnées), variations de la taille de fenêtre.
-- Évaluation : distance au point humain, taux de segments qui coupent un mur, rappel des branches aux intersections.
+- Encodeur de vision pré-entraîné (ResNet-18/ConvNeXt) à 4 canaux (RGB + canal « déjà tracé »), tête sigmoïde à 32 sorties
+  (une par secteur, perte BCE sur les étiquettes douces) ; `end` = aucun secteur au-dessus du seuil.
+- Augmentations déjà faites par l'oracle (décalage, erreur de cap) ; en plus, variations de contraste et de taille de fenêtre.
+- Validation sur un secteur entier de carte (`--holdout`), métriques de `trace.py` (couverture, précision, intersections) en
+  branchant le modèle à la place de l'oracle ; définir le seuil de confiance et la politique de rejet avant tout usage.

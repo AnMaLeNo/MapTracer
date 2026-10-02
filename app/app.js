@@ -25,7 +25,7 @@ const idb = {
 /* ---------- projet ---------- */
 let project = newProject();
 function newProject() {
-  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: false }, events: [] };
+  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: true }, events: [] };
 }
 let img = null;           // ImageBitmap de la carte
 let mapIndex = [];        // maps/index.json
@@ -447,7 +447,7 @@ $('importFile').addEventListener('change', async e => {
     const p = JSON.parse(await f.text());
     if (p.format !== FORMAT) throw new Error('format inconnu');
     if (project.events.length && !confirm('Remplacer le projet courant ?')) return;
-    const mig = migrateProject({ format: FORMAT, rev: p.rev, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: false, ...p.settings }, events: p.events || [] });
+    const mig = migrateProject({ format: FORMAT, rev: p.rev, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: true, ...p.settings }, events: p.events || [] });
     project = mig.project;
     if (mig.status === 'migrated') warn('Projet importé réparé : des « cul-de-sac » enregistrés à tort ont été retirés.');
     if (mig.status === 'kept') warn('Projet ancien conservé tel quel (comportement d’avant la correction des jonctions).');
