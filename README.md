@@ -160,3 +160,19 @@ dans `trace.py` et appariés aux directions cibles à ±17° → précision/rapp
 rappel aux intersections, erreur angulaire moyenne. Le meilleur F1 est sauvegardé. La vraie mesure reste `trace.py`
 (couverture, précision, intersections) sur une zone jamais vue.
 
+### Premier résultat (Nexus 2011, 1 138 points annotés, zone de validation sud `4200,3200,5800,3600`)
+
+Entraînement sur RTX 3080 : 10 263 exemples, 30 époques (3,6 s/époque). Validation (exemples) : précision des directions
+98 %, rappel 90 %, erreur angulaire 2,5°, cul-de-sac 70 %, rappel aux intersections 67 %. Suivi réel avec `trace.py
+--bbox … --seed auto` (un départ par composante de la référence), tolérance 6 px :
+
+| modèle | couverture | précision | intersections |
+|---|---|---|---|
+| oracle (borne haute de la mécanique) | 100 % | 98,5 % | 15/15 |
+| ResNet-18 v2 | 93,8 % | 86,0 % | 8/15 |
+
+À lire avec prudence : une seule carte, une seule zone (1 400 px de galeries, 15 carrefours) ; la « précision » est mesurée
+contre une annotation incomplète (le modèle suit vers Port-Mahon une galerie dessinée mais non annotée, comptée comme
+fausse) ; les carrefours manqués sont surtout les petits embranchements rapprochés du bd Saint-Jacques. Ce n'est pas encore
+un traceur autonome : il sert à proposer, l'humain valide.
+
