@@ -225,7 +225,7 @@ class Graph:
 
 def graph_from_project(proj):
     """Graphe non orienté : arêtes parent→enfant (place/split) + jonctions, rejouées depuis `events`."""
-    pts, decisions = replay(proj['events'])
+    pts, decisions = replay(proj['events'], proj.get('rev', 1))
     g = Graph()
     for p in pts.values():
         g.add_node(p['x'], p['y'], p['kind'], p['id'])
