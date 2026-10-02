@@ -24,7 +24,7 @@ const idb = {
 /* ---------- projet ---------- */
 let project = newProject();
 function newProject() {
-  return { format: FORMAT, name: '', map: null, settings: { window: 256, allowOutside: false }, events: [] };
+  return { format: FORMAT, name: '', map: null, settings: { window: 256, allowOutside: true }, events: [] };
 }
 let img = null;           // ImageBitmap de la carte
 let mapIndex = [];        // maps/index.json
@@ -401,7 +401,7 @@ $('importFile').addEventListener('change', async e => {
     const p = JSON.parse(await f.text());
     if (p.format !== FORMAT) throw new Error('format inconnu');
     if (project.events.length && !confirm('Remplacer le projet courant ?')) return;
-    project = { format: FORMAT, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: false, ...p.settings }, events: p.events || [] };
+    project = { format: FORMAT, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: true, ...p.settings }, events: p.events || [] };
     syncSettingsUI();
     if (project.map) {
       const entry = mapIndex.find(m => m.id === project.map.id);
