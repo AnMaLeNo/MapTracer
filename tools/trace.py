@@ -57,7 +57,7 @@ class OracleModel:
         if best is None:
             return [0.0] * self.K
         _, a, b, t = best
-        angles, _ = G.oracle_directions(self.ref, a, b, t, x, y, heading, self.L, self.step)
+        angles, _ = G.oracle_directions(self.ref, a, b, t, x, y, heading, self.L, self.step, near=3 * self.step)
         angles = [an + self.rng.gauss(0, self.noise) for an in angles if self.rng.random() >= self.drop]
         return G.soft_label(angles, self.K)
 
@@ -178,23 +178,27 @@ class Tracer:
             main = min(pk, key=lambda p: abs(p[0]))
             sides = [p for p in pk if p is not main and
                      abs((p[0] - main[0] + math.pi) % (2 * math.pi) - math.pi) >= self.side_sep]
-            # suivi des directions latérales : confirmées après `confirm` observations (`grace` pas sans les voir tolérés)
+            # suivi des directions latérales : une branche s'ouvre quand une direction vue ≥ `confirm` fois disparaît
+            # (`grace` pas sans la voir tolérés) ou à la fin de la branche
             seen = set()
             for rel, _ in sides:
                 a = (heading + rel) % (2 * math.pi)
-                for i, pd in enumerate(pending):
-                    if i not in seen and abs((a - pd['angle'] + math.pi) % (2 * math.pi) - math.pi) < math.radians(75):
+                for i, pd in enumerate(pending):          # même direction, vue aux pas précédents (pas un autre carrefour plus loin)
+                    if i not in seen and abs((a - pd['angle'] + math.pi) % (2 * math.pi) - math.pi) < math.radians(75) \
+                            and math.dist((x, y), self.out.xy(pd['node'])) <= (pd['miss'] + 1) * self.step * 1.25:
                         pd['angle'], pd['node'], pd['count'], pd['miss'] = a, node, pd['count'] + 1, 0; seen.add(i); break
                 else:
                     pending.append({'angle': a, 'node': node, 'count': 1, 'miss': 0}); seen.add(len(pending) - 1)
-            keep = []
+            keep = []                                        # le carrefour est posé là où la direction latérale a été vue en dernier
             for i, pd in enumerate(pending):
-                if pd['count'] >= self.confirm:
-                    self.spawn(pd['node'], pd['angle'])
-                elif i in seen or pd['miss'] < self.grace:
-                    if i not in seen:
-                        pd['miss'] += 1
+                if i in seen:
                     keep.append(pd)
+                elif pd['miss'] < self.grace:
+                    pd['miss'] += 1; keep.append(pd)
+                elif pd['count'] >= self.confirm:
+                    self.spawn(pd['node'], pd['angle'])
+                elif self.verbose:
+                    print(f"    latérale vue {pd['count']}× abandonnée à {tuple(round(v) for v in self.out.xy(pd['node']))} ({math.degrees(pd['angle']):.0f}°)")
             pending = keep
             # avance d'un pas
             heading = heading + main[0]

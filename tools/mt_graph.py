@@ -98,15 +98,27 @@ class Graph:
                 best = (d, n)
         return best
 
-    def lookahead(self, a, b, t, L, step):
+    def lookahead(self, a, b, t, L, step, near=None, bend_deg=45):
         """Depuis la position t sur l'arête a→b (cap vers b), suit le graphe sur une distance géodésique L.
 
         Renvoie la liste des points atteints (un par branche) : {'x','y','dist','dead'}.
         Un cul-de-sac situé à moins d'un pas donne dead=True et dist < step → aucune direction (fin de galerie).
+        Avec `near` : un carrefour (degré ≥ 3) ou un virage serré (> bend_deg) à plus de `near` px arrête la visée (la cible
+        est ce point-là : on y va tout droit) ; à moins de `near`, les cibles sont à L du carrefour sur chaque branche.
         """
         out = []
-        px, py = self.lerp(a, b, t)
-        rem_edge = (1 - t) * self.length(a, b)
+        bend = math.radians(bend_deg)
+
+        def turn(u, v, w):
+            ux, uy = self.xy(u); vx, vy = self.xy(v); wx, wy = self.xy(w)
+            if (ux, uy) == (vx, vy) or (vx, vy) == (wx, wy):
+                return 0.0
+            h1 = math.atan2(vy - uy, vx - ux); h2 = math.atan2(wy - vy, wx - vx)
+            return (h2 - h1 + math.pi) % (2 * math.pi) - math.pi
+
+        def is_waypoint(u, v):         # au nœud v (atteint depuis u) : carrefour ou virage serré ?
+            nxt = [w for w in self.adj[v] if w != u]
+            return len(nxt) >= 2 or (len(nxt) == 1 and abs(turn(u, v, nxt[0])) > bend)
 
         def walk(u, v, used):          # au nœud u, on part vers v ; `used` = distance déjà parcourue
             d = self.length(u, v)
@@ -116,9 +128,15 @@ class Graph:
             nxt = [w for w in self.adj[v] if w != u]
             if not nxt:
                 x, y = self.xy(v); out.append({'x': x, 'y': y, 'dist': used + d, 'dead': True, 'open': v in self.open}); return
+            if near is not None and is_waypoint(u, v):
+                if used + d > near:    # trop loin : on y va tout droit
+                    x, y = self.xy(v); out.append({'x': x, 'y': y, 'dist': used + d, 'dead': False}); return
+                used = -d              # dessus : les cibles sont à L du carrefour / virage lui-même
             for w in nxt:
                 walk(v, w, used + d)
 
+        px, py = self.lerp(a, b, t)
+        rem_edge = (1 - t) * self.length(a, b)
         if rem_edge >= L and rem_edge > 0:
             x, y = self.lerp(a, b, t + L / self.length(a, b))
             out.append({'x': x, 'y': y, 'dist': L, 'dead': False})
@@ -126,8 +144,12 @@ class Graph:
             nxt = [w for w in self.adj[b] if w != a]
             if not nxt:
                 x, y = self.xy(b); out.append({'x': x, 'y': y, 'dist': rem_edge, 'dead': True, 'open': b in self.open})
-            for w in nxt:
-                walk(b, w, rem_edge)
+            elif near is not None and is_waypoint(a, b) and rem_edge > near:
+                x, y = self.xy(b); out.append({'x': x, 'y': y, 'dist': rem_edge, 'dead': False})
+            else:
+                used = 0.0 if (near is not None and is_waypoint(a, b)) else rem_edge
+                for w in nxt:
+                    walk(b, w, used)
         # dédoublonne (boucles très courtes)
         seen, res = set(), []
         for o in out:
@@ -300,13 +322,13 @@ def render_traced(segs, px, py, heading, W, width):
     return im
 
 
-def oracle_directions(g, a, b, t, px, py, heading, L, step, skip_open=False):
+def oracle_directions(g, a, b, t, px, py, heading, L, step, skip_open=False, near=None, bend_deg=45):
     """Directions cibles (angles relatifs, rad) depuis la position réelle (px,py) avec cap `heading`,
     pour un état de référence « sur l'axe » à la position t de l'arête a→b. Renvoie (angles, points).
 
     Une extrémité « ouverte » (amorce jamais terminée) n'est pas un cul-de-sac : la galerie continue probablement.
     Avec skip_open, l'état est inexploitable comme exemple → (None, None) ; sinon elle compte comme une direction."""
-    pts = g.lookahead(a, b, t, L, step)
+    pts = g.lookahead(a, b, t, L, step, near, bend_deg)
     if skip_open and any(q['dead'] and q.get('open') for q in pts):
         return None, None
     angles, keep = [], []

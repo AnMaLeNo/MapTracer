@@ -73,23 +73,23 @@ class Assistant:
             else:
                 coasting = 0
             main = min(pk, key=lambda p: abs(p[0]))
+            fwd = ((h + main[0]) % (2 * math.pi), float(main[1]))
             sides = [(p[0], p[1]) for p in pk if p is not main and abs(p[0] - main[0]) >= self.side_sep]
             seen = set()
             for rel, sc in sides:
                 a = (h + rel) % (2 * math.pi)
                 for i, pd in enumerate(pending):
                     if i not in seen and abs((a - pd['a'] + math.pi) % (2 * math.pi) - math.pi) < math.radians(75):
-                        pd.update(a=a, n=pd['n'] + 1, p=max(pd['p'], sc)); seen.add(i); break
+                        pd.update(a=a, n=pd['n'] + 1, p=max(pd['p'], sc), i=len(path) - 1, fwd=fwd); seen.add(i); break
                 else:
-                    pending.append({'a': a, 'n': 1, 'p': sc, 'x': x, 'y': y, 'i': len(path) - 1}); seen.add(len(pending) - 1)
+                    pending.append({'a': a, 'n': 1, 'p': sc, 'i': len(path) - 1, 'fwd': fwd}); seen.add(len(pending) - 1)
+            # le carrefour est là où une direction latérale confirmée a été vue en dernier (elle disparaît une fois dépassée)
+            gone = [pd for i, pd in enumerate(pending) if i not in seen and pd['n'] >= self.confirm]
             pending = [pd for i, pd in enumerate(pending) if i in seen]
-            conf = [pd for pd in pending if pd['n'] >= self.confirm]
-            if conf and len(path) > 1:
-                kind = 'intersection'
-                pd = conf[0]
-                k = max(1, pd['i'])                      # le carrefour proposé est au moins un pas devant
+            if gone and len(path) > 1:
+                kind, dirs = 'intersection', self._junction(gone)
+                k = max(1, gone[0]['i'])                 # le carrefour proposé est au moins un pas devant
                 path = path[:k + 1]; confs = confs[:k]
-                dirs = [((h + main[0]) % (2 * math.pi), float(main[1]))] + [(c['a'], float(c['p'])) for c in conf]
                 break
             h = h + main[0]
             nx, ny = x + self.step * math.cos(h), y + self.step * math.sin(h)
@@ -98,15 +98,23 @@ class Assistant:
             if n >= 2 and _near_segment(nx, ny, self.segs, 0.75 * self.step, touching):
                 path.append((nx, ny)); confs.append(main[1]); kind = 'junction'; break
             extra.append((x, y, nx, ny)); path.append((nx, ny)); confs.append(main[1]); x, y = nx, ny
+        conf = [pd for pd in pending if pd['n'] >= self.confirm]
+        if kind == 'normal' and conf and len(path) > 1:  # direction latérale encore visible au bout de la portée
+            kind, dirs = 'intersection', self._junction(conf)
+            k = max(1, conf[0]['i'])
+            path = path[:k + 1]; confs = confs[:k]
         if kind == 'normal' and len(path) == 1:
             kind = 'end'
-        if kind == 'intersection' and not dirs:
-            dirs = []
         ex, ey = path[-1]
         c = min(confs) if confs else (float(max(probs)) if kind != 'end' else 1.0 - float(max(probs)))
         return {'kind': kind, 'x': round(ex, 1), 'y': round(ey, 1), 'conf': round(float(c), 3),
                 'path': [[round(px, 1), round(py, 1)] for px, py in path],
                 'dirs': [{'deg': round(math.degrees(a) % 360, 1), 'p': round(p, 3)} for a, p in dirs]}
+
+    @staticmethod
+    def _junction(pds):
+        """Directions au carrefour : continuation (vue au même instant) + directions latérales confirmées."""
+        return [pds[0]['fwd']] + [(pd['a'], float(pd['p'])) for pd in pds]
 
     def propose(self, x, y, heading, dist, branching):
         """Point normal : une proposition dans le cap. Départ/intersection : une proposition par direction."""

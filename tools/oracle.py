@@ -46,7 +46,8 @@ def make_sample(g, img, a, b, t, args, rng, perturb):
     dh = math.radians(rng.uniform(-args.heading_noise, args.heading_noise)) if perturb else 0.0
     px = ax - math.sin(heading0) * off; py = ay + math.cos(heading0) * off     # décalage latéral (droite = +)
     heading = heading0 + dh
-    angles, pts = G.oracle_directions(g, a, b, t, px, py, heading, args.lookahead, args.step, skip_open=True)
+    angles, pts = G.oracle_directions(g, a, b, t, px, py, heading, args.lookahead, args.step, skip_open=True,
+                                      near=args.near, bend_deg=args.bend_deg)
     if angles is None:
         return None
     W = args.window
@@ -75,10 +76,12 @@ def main():
     ap.add_argument('--window', type=int, default=128, help='taille de la fenêtre (px carte)')
     ap.add_argument('--step', type=float, default=4, help='pas fixe du suivi (px) : cul-de-sac si fin < 1 pas')
     ap.add_argument('--lookahead', type=float, help='distance de visée (px, défaut 4×pas)')
+    ap.add_argument('--near', type=float, help='rayon (px) autour d’un carrefour / virage serré où la visée le traverse (défaut 3×pas)')
+    ap.add_argument('--bend-deg', type=float, default=45, help='virage considéré comme serré (°) : la visée s’y arrête')
     ap.add_argument('--sectors', type=int, default=32)
     ap.add_argument('--spacing', type=float, help='distance entre positions le long des arêtes (défaut = pas)')
     ap.add_argument('--aug', type=int, default=2, help='copies perturbées par position (en plus de la copie exacte)')
-    ap.add_argument('--offset', type=float, default=3, help='décalage latéral max (px)')
+    ap.add_argument('--offset', type=float, help='décalage latéral max (px, défaut 0,75×pas)')
     ap.add_argument('--heading-noise', type=float, default=25, help='erreur de cap max (°)')
     ap.add_argument('--trace-width', type=int, default=3, help='épaisseur du canal déjà tracé (px)')
     ap.add_argument('--holdout', help='x0,y0,x1,y1 (px carte) : zone de validation')
@@ -87,6 +90,8 @@ def main():
     args = ap.parse_args()
     args.lookahead = args.lookahead or 4 * args.step
     args.spacing = args.spacing or args.step
+    args.near = args.near if args.near is not None else 3 * args.step
+    args.offset = args.offset if args.offset is not None else 0.75 * args.step
     rng = random.Random(args.seed)
 
     proj = G.load_project(args.project)
