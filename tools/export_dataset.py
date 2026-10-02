@@ -16,7 +16,7 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
 
-def replay(events):
+def replay(events, rev=1):
     """Reproduit la dérivation de app.js et renvoie la liste des décisions dans l'ordre."""
     pts, children, visited, queue = {}, {}, set(), []
     st = {'cur': None, 'start': None}
@@ -60,7 +60,11 @@ def replay(events):
             d['terminal'] = 'continue' if t == 'advance' else ('end' if t == 'end' else 'join')
             if t == 'join':
                 d['join_to'] = ev['to']
-                if ev.get('retype'):
+                if rev >= 2 and ev['to'] not in visited and pts[ev['to']]['kind'] == 'normal':
+                    # amorce jamais visitée : simple point de passage, on la dépasse (cf. app.js)
+                    visited.add(ev['to'])
+                    queue[:] = [q for q in queue if q != ev['to']]
+                elif ev.get('retype'):
                     pts[ev['to']]['kind'] = 'intersection'
             if d['window'] is None:
                 d['window'] = w
@@ -96,7 +100,7 @@ def main():
 
     proj = json.load(open(a.project, encoding='utf-8'))
     assert proj.get('format') == 'maptracer/1', 'format inattendu'
-    pts, decisions = replay(proj['events'])
+    pts, decisions = replay(proj['events'], proj.get('rev', 1))
     img = Image.open(a.image).convert('RGB')
     if proj.get('map') and (img.width, img.height) != (proj['map']['width'], proj['map']['height']):
         raise SystemExit(f"image {img.size} ≠ carte du projet {proj['map']['width']}×{proj['map']['height']}")
