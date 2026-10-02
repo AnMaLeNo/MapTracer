@@ -25,7 +25,7 @@ const idb = {
 /* ---------- projet ---------- */
 let project = newProject();
 function newProject() {
-  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: true }, events: [] };
+  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: true, assist: false, proposeDist: 32 }, events: [] };
 }
 let img = null;           // ImageBitmap de la carte
 let mapIndex = [];        // maps/index.json
@@ -34,6 +34,9 @@ let nextKind = 'normal';  // type du prochain point posé
 let hover = null;         // {x,y} coordonnées carte sous la souris
 let snapId = null;        // point existant sous la souris (jonction)
 let snapEdge = null;      // {from,to,x,y} arête sous la souris (jonction par insertion d'intersection)
+let prop = null;          // proposition du modèle pour le point courant : {branching, items:[{kind,x,y,conf,path,dirs}]}
+let propSeq = 0;          // numéro de la dernière requête (ignore les réponses périmées)
+let modelInfo = null;     // réponse de /api/model
 
 /* ---------- dérivation de l'état depuis le journal ---------- */
 function derive(events, rev) {
@@ -127,6 +130,76 @@ function migrateProject(p) {
 
 /* ---------- événements utilisateur ---------- */
 function push(ev) { ev.ts = Date.now(); project.events.push(ev); refresh(true); }
+/* ---------- mode assisté ---------- */
+function propSummary(items) {
+  return items.map(it => ({ kind: it.kind, x: Math.round(it.x), y: Math.round(it.y), conf: it.conf }));
+}
+function withProp(ev, accepted) {          // journalise la proposition en vigueur et si elle a été suivie
+  if (prop && prop.items.length) { ev.prop = propSummary(prop.items); ev.accepted = accepted; }
+  return ev;
+}
+function currentHeading(c) {
+  const p = c.parent != null ? D.points[c.parent] : null;
+  return p ? Math.atan2(c.y - p.y, c.x - p.x) : null;
+}
+async function requestProposal() {
+  const c = cur();
+  prop = null; dirty = true;
+  if (!project.settings.assist || !img || !c || D.done) return updateAssistInfo();
+  if (!project.map || project.map.id.startsWith('local:')) return updateAssistInfo('Carte locale : le serveur ne la connaît pas (choisissez-la dans la liste).');
+  const entry = mapIndex.find(m => m.id === project.map.id);
+  if (!entry) return updateAssistInfo('Carte inconnue du serveur.');
+  const seq = ++propSeq;
+  const w = project.settings.window, R = Math.max(w, 2 * project.settings.proposeDist) + 64;
+  const segs = D.edges.map(e => [D.points[e.from], D.points[e.to]])
+    .filter(([a, b]) => Math.min(Math.hypot(a.x - c.x, a.y - c.y), Math.hypot(b.x - c.x, b.y - c.y)) < R)
+    .map(([a, b]) => [a.x, a.y, b.x, b.y]);
+  updateAssistInfo('Le modèle réfléchit…');
+  try {
+    const r = await fetch('../api/predict', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ map: entry.url.replace(/^\.\.\//, ''), x: c.x, y: c.y, heading: currentHeading(c), branching: isBranching(c),
+                             dist: project.settings.proposeDist, segs }) });
+    const res = await r.json();
+    if (seq !== propSeq) return;
+    if (!r.ok) return updateAssistInfo('Modèle indisponible : ' + (res.error || r.status));
+    if (res.branching) {        // n'écarte que les directions déjà couvertes par une amorce posée
+      const kids = (D.children[c.id] || []).map(id => Math.atan2(D.points[id].y - c.y, D.points[id].x - c.x));
+      res.items = res.items.filter(it => kids.every(k => { const d = Math.abs((((it.dir.deg * Math.PI / 180) - k) + 3 * Math.PI) % (2 * Math.PI) - Math.PI); return d > Math.PI / 9; }));
+    }
+    prop = res; dirty = true; updateAssistInfo();
+  } catch (err) { if (seq === propSeq) updateAssistInfo('Erreur : ' + err.message); }
+}
+function updateAssistInfo(msg) {
+  const el = $('assistInfo');
+  if (msg) { el.textContent = msg; return; }
+  if (!project.settings.assist) { el.textContent = modelInfo && modelInfo.available ? `Modèle prêt (${modelInfo.device}).` : 'Mode manuel.'; return; }
+  if (!prop) { el.textContent = modelInfo && modelInfo.available ? 'Aucune proposition.' : 'Modèle indisponible : lancez server.py --model …'; return; }
+  const names = { normal: 'point normal', intersection: 'intersection', end: 'cul-de-sac', junction: 'jonction' };
+  if (!prop.items.length) { el.textContent = 'Le modèle ne voit aucune direction nouvelle (F si cul-de-sac).'; return; }
+  el.innerHTML = prop.items.map(it => `<span class="prop">${names[it.kind]} <b>${Math.round(it.conf * 100)} %</b>` +
+    (it.dir ? ` · ${it.dir.deg}°` : '') + (it.kind === 'intersection' && it.dirs.length ? ` · ${it.dirs.length} directions` : '') + '</span>').join(' ');
+}
+function acceptProposal(only) {
+  const c = cur();
+  if (!prop || !c || D.done) return;
+  const items = only ? [only] : prop.items;
+  if (!items.length) return warn('Aucune proposition à accepter.');
+  const summary = propSummary(prop.items);
+  for (const it of items) {
+    if (it.kind === 'end') { push({ t: 'end', window: project.settings.window, prop: summary, accepted: true }); break; }
+    const x = Math.round(it.x), y = Math.round(it.y);
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
+    const kind = it.kind === 'intersection' ? 'intersection' : 'normal';
+    project.events.push({ t: 'place', id: derive(project.events, project.rev).nextId, from: c.id, x, y, kind, window: project.settings.window,
+                          prop: summary, accepted: true, ts: Date.now() });
+  }
+  refresh(true);
+}
+function proposalAt(mx, my) {
+  if (!prop) return null;
+  const r = 10 / view.s;
+  return prop.items.find(it => it.kind !== 'end' && Math.hypot(it.x - mx, it.y - my) < r) || null;
+}
 function placePoint(x, y, kind) {
   if (!img) return warn('Chargez une carte.');
   if (D.done) return warn('Session terminée (annulez pour reprendre).');
@@ -135,7 +208,7 @@ function placePoint(x, y, kind) {
   const c = cur();
   if (!c) { push({ t: 'start', id: D.nextId, x, y }); return; }
   if (!project.settings.allowOutside && !inWindow(x, y)) return warn('Point hors de la fenêtre : le modèle ne le verrait pas (zoom/fenêtre, ou cochez « hors fenêtre »).');
-  push({ t: 'place', id: D.nextId, from: c.id, x, y, kind, window: project.settings.window });
+  push(withProp({ t: 'place', id: D.nextId, from: c.id, x, y, kind, window: project.settings.window }, false));
   nextKind = 'normal';
 }
 function joinTo(id) {
@@ -160,7 +233,7 @@ function doAdvance() {
 function doEnd() {
   const c = cur(); if (!c || D.done) return;
   if (isBranching(c) && unvisitedChildren(c.id).length) return doAdvance();
-  push({ t: 'end', window: project.settings.window });
+  push(withProp({ t: 'end', window: project.settings.window }, !!(prop && prop.items.length === 1 && prop.items[0].kind === 'end')));
 }
 function doRetype() {
   const c = cur(); if (!c || D.done || c.kind === 'start') return;
@@ -243,6 +316,29 @@ function draw() {
       ctx.beginPath(); ctx.arc(x1, y1, 9, 0, 7); ctx.stroke();
       ctx.lineWidth = Math.max(1.5, Math.min(4, view.s * 1.2));
     }
+  }
+  // propositions du modèle
+  if (c && prop && !D.done) {
+    ctx.strokeStyle = '#d46cff'; ctx.fillStyle = '#d46cff'; ctx.lineWidth = Math.max(1.5, Math.min(3, view.s));
+    ctx.font = '12px system-ui, sans-serif'; ctx.textBaseline = 'bottom';
+    for (const it of prop.items) {
+      const pts = [[c.x, c.y], ...it.path.slice(1)];
+      ctx.setLineDash([3, 3]); ctx.beginPath();
+      pts.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+      ctx.stroke(); ctx.setLineDash([]);
+      const [ex, ey] = toScreen(it.x, it.y);
+      if (it.kind !== 'end') {
+        ctx.beginPath(); ctx.arc(ex, ey, 7, 0, 7); ctx.stroke();
+        if (it.kind === 'intersection') { ctx.beginPath(); ctx.arc(ex, ey, 3, 0, 7); ctx.fill(); }
+        if (it.kind === 'intersection') for (const d of it.dirs) {
+          const a = d.deg * Math.PI / 180;
+          ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + 18 * Math.cos(a), ey + 18 * Math.sin(a)); ctx.stroke();
+        }
+      }
+      const label = `${it.kind === 'end' ? 'cul-de-sac' : it.kind === 'junction' ? 'jonction' : it.kind === 'intersection' ? 'intersection' : ''} ${Math.round(it.conf * 100)} %`.trim();
+      ctx.fillText(label, ex + 10, ey - 8);
+    }
+    if (!prop.items.length) { const [sx, sy] = toScreen(c.x, c.y); ctx.fillText('aucune direction ?', sx + 10, sy - 8); }
   }
   // points
   const r = Math.max(3, Math.min(7, view.s * 1.5));
@@ -338,6 +434,8 @@ window.addEventListener('mouseup', e => {
   updateHover();
   if (snapId != null) { joinTo(snapId); return; }
   if (snapEdge) { splitEdge(snapEdge); return; }
+  const hit = e.button === 0 && !e.shiftKey && proposalAt(hover.x, hover.y);
+  if (hit) { acceptProposal(hit); return; }
   const kind = (e.button === 2 || e.shiftKey) ? 'intersection' : nextKind;
   placePoint(hover.x, hover.y, kind);
 });
@@ -356,6 +454,8 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); doUndo(); return; }
   if (e.ctrlKey || e.metaKey) return;
   if (k === ' ') { e.preventDefault(); doAdvance(); }
+  else if (k === 'enter') { e.preventDefault(); acceptProposal(); }
+  else if (k === 'a') { project.settings.assist = !project.settings.assist; syncSettingsUI(); refresh(true); }
   else if (k === 'f') doEnd();
   else if (k === 'i') { nextKind = nextKind === 'normal' ? 'intersection' : 'normal'; updateUI(); }
   else if (k === 't') doRetype();
@@ -383,9 +483,12 @@ function updateUI() {
   const len = D.edges.reduce((s, e) => { const a = D.points[e.from], b = D.points[e.to]; return s + Math.hypot(a.x - b.x, a.y - b.y); }, 0);
   $('stats').innerHTML = `<span>Points <b>${D.order.length}</b></span><span>Segments <b>${D.edges.length}</b></span>` +
     `<span>Intersections <b>${nInter}</b></span><span>Décisions <b>${D.visits.length}</b></span>` +
-    `<span>Longueur <b>${Math.round(len)} px</b></span><span>Événements <b>${project.events.length}</b></span>`;
+    `<span>Longueur <b>${Math.round(len)} px</b></span><span>Événements <b>${project.events.length}</b></span>` +
+    `<span>Propositions suivies <b>${project.events.filter(ev => ev.prop && ev.accepted).length}</b></span><span>corrigées <b>${project.events.filter(ev => ev.prop && !ev.accepted).length}</b></span>`;
   $('btnKind').innerHTML = `Prochain point : <b>${nextKind}</b>`; $('btnKind').classList.toggle('active', nextKind === 'intersection');
   $('btnAdvance').disabled = !c || D.done || !isBranching(c);
+  $('btnAccept').disabled = !c || D.done || !prop || !prop.items.length;
+  $('btnAccept').classList.toggle('active', !!(prop && prop.items.length));
   $('btnEnd').disabled = !c || D.done;
   $('btnRetype').disabled = !c || D.done || c.kind === 'start';
   $('btnUndo').disabled = !project.events.length;
@@ -401,8 +504,10 @@ function updateUI() {
     if (ev.t === 'join') d += ` → n°${D.points[ev.to] ? D.points[ev.to].order : '?'}${ev.retype ? ' (→ intersection)' : ''}`;
     if (ev.t === 'split') d += ` → nouvelle intersection (${ev.x}, ${ev.y})`;
     if (ev.t === 'retype') d += ` → ${ev.kind}`;
+    if (ev.prop) d += ev.accepted ? ' ✓ proposé' : ' ✗ corrigé';
     return `<li>#${n} ${d}</li>`;
   }).join('');
+  updateAssistInfo();
   $('mapInfo').textContent = project.map ? `${project.map.name} — ${project.map.width}×${project.map.height} px${project.map.georef ? ' · géoréférencée' : ''}` : 'Aucune carte chargée.';
 }
 $('queue').addEventListener('click', e => { const li = e.target.closest('li'); if (!li) return; const p = D.points[+li.dataset.id]; view.cx = p.x; view.cy = p.y; updateHover(); });
@@ -413,8 +518,12 @@ function refresh(save) {
   if (c && (save || !img)) recenter();
   updateHover();
   updateUI(); dirty = true;
+  requestProposal();
   if (save) { clearTimeout(saveTimer); saveTimer = setTimeout(() => idb.set('project', project), 300); }
 }
+$('assist').addEventListener('change', () => { project.settings.assist = $('assist').checked; refresh(true); });
+$('proposeDist').addEventListener('change', () => { project.settings.proposeDist = Math.max(8, +$('proposeDist').value || 32); $('proposeDist').value = project.settings.proposeDist; refresh(true); });
+$('btnAccept').onclick = () => acceptProposal();
 $('winSize').addEventListener('change', () => { project.settings.window = Math.max(32, +$('winSize').value || 256); $('winSize').value = project.settings.window; refresh(true); });
 $('allowOutside').addEventListener('change', () => { project.settings.allowOutside = $('allowOutside').checked; refresh(true); });
 $('showOrder').addEventListener('change', () => { dirty = true; });
@@ -461,7 +570,10 @@ $('importFile').addEventListener('change', async e => {
   } catch (err) { warn('Import impossible : ' + err.message); }
   e.target.value = '';
 });
-function syncSettingsUI() { $('winSize').value = project.settings.window; $('allowOutside').checked = project.settings.allowOutside; $('projName').value = project.name || ''; }
+function syncSettingsUI() {
+  $('winSize').value = project.settings.window; $('allowOutside').checked = project.settings.allowOutside; $('projName').value = project.name || '';
+  $('assist').checked = !!project.settings.assist; $('proposeDist').value = project.settings.proposeDist || 32;
+}
 
 /* ---------- chargement des cartes ---------- */
 async function sha(blob) { const h = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()); return [...new Uint8Array(h)].slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -503,6 +615,7 @@ main.addEventListener('drop', e => { e.preventDefault(); main.classList.remove('
   resize(); loop();
   await idb.open();
   try { mapIndex = await (await fetch('../maps/index.json')).json(); } catch (_) { mapIndex = []; }
+  try { const r = await fetch('../api/model'); modelInfo = await r.json(); } catch (_) { modelInfo = null; }
   mapIndex.forEach(m => { m.url = '../' + m.url; if (m.georef) m.georef = '../' + m.georef; });
   $('mapSelect').innerHTML += mapIndex.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
   const saved = await idb.get('project');

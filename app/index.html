@@ -25,6 +25,9 @@
     <label class="row">Fenêtre (px carte) <input type="number" id="winSize" min="32" max="4096" step="16" value="256"></label>
     <label class="row"><input type="checkbox" id="allowOutside"> Autoriser un point hors fenêtre</label>
     <label class="row"><input type="checkbox" id="showOrder" checked> Numéroter les points</label>
+    <label class="row"><input type="checkbox" id="assist"> Mode assisté (le modèle propose) <kbd>A</kbd></label>
+    <label class="row">Portée des propositions (px) <input type="number" id="proposeDist" min="8" max="512" step="4" value="32"></label>
+    <div id="assistInfo" class="muted small"></div>
     <label class="row">Projet <input type="text" id="projName" placeholder="nom du projet"></label>
   </section>
 
@@ -38,6 +41,7 @@
     <h2>Actions</h2>
     <div class="btns">
       <button id="btnKind" title="I ou Maj+clic / clic droit">Prochain point : <b>normal</b></button>
+      <button id="btnAccept" title="Entrée">Accepter la proposition <kbd>Entrée</kbd></button>
       <button id="btnAdvance" title="Espace">Point suivant <kbd>Espace</kbd></button>
       <button id="btnEnd" title="F">Fin de branche <kbd>F</kbd></button>
       <button id="btnRetype" title="T">Changer le type du point courant <kbd>T</kbd></button>
@@ -81,6 +85,7 @@
       <li>Point <b>intersection</b> (Maj+clic, clic droit ou <kbd>I</kbd>) : posez une amorce par branche, puis <kbd>Espace</kbd>.</li>
       <li><kbd>F</kbd> : cul-de-sac → passe à la branche en attente suivante, sinon retour au départ.</li>
       <li>Clic sur un point existant : jonction (zone déjà cartographiée), termine la branche.</li>
+      <li>Mode <b>assisté</b> (<kbd>A</kbd>, serveur lancé avec <code>--model</code>) : le modèle propose en violet le prochain point (ou les amorces, ou « cul-de-sac ») avec sa confiance. <kbd>Entrée</kbd> ou clic sur la proposition = accepter ; cliquer ailleurs / <kbd>F</kbd> = corriger. Chaque décision est journalisée avec la proposition.</li>
       <li>Molette : zoom · glisser : déplacer la vue · <kbd>C</kbd> : recentrer.</li>
     </ul>
   </section>
