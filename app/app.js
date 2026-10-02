@@ -4,6 +4,7 @@
 
 const $ = id => document.getElementById(id);
 const FORMAT = 'maptracer/1';
+const REV = 2;            // 2 : une jonction sur une amorce jamais visitée la dépasse au lieu de nous y ramener
 
 /* ---------- persistance (IndexedDB) ---------- */
 const idb = {
@@ -24,20 +25,20 @@ const idb = {
 /* ---------- projet ---------- */
 let project = newProject();
 function newProject() {
-  return { format: FORMAT, name: '', map: null, settings: { window: 256, allowOutside: false }, events: [] };
+  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: false }, events: [] };
 }
 let img = null;           // ImageBitmap de la carte
 let mapIndex = [];        // maps/index.json
-let D = derive([]);       // état dérivé
+let D = derive([], REV);       // état dérivé
 let nextKind = 'normal';  // type du prochain point posé
 let hover = null;         // {x,y} coordonnées carte sous la souris
 let snapId = null;        // point existant sous la souris (jonction)
 let snapEdge = null;      // {from,to,x,y} arête sous la souris (jonction par insertion d'intersection)
 
 /* ---------- dérivation de l'état depuis le journal ---------- */
-function derive(events) {
+function derive(events, rev) {
   const S = { points: {}, order: [], edges: [], children: {}, terminal: {}, visited: new Set(),
-              current: null, start: null, queue: [], done: false, nextId: 1, visits: [] };
+              current: null, start: null, queue: [], done: false, nextId: 1, visits: [], preJoined: new Set() };
   const addPoint = (id, x, y, kind, parent) => {
     S.points[id] = { id, x, y, kind, parent, order: S.order.length };
     S.order.push(id); S.children[id] = []; S.nextId = Math.max(S.nextId, id + 1);
@@ -61,10 +62,18 @@ function derive(events) {
         break;
       case 'advance': S.terminal[S.current] = 'continue'; advance(); break;
       case 'end': S.terminal[S.current] = 'end'; advance(); break;
-      case 'join':
+      case 'join': {
+        // Amorce normale jamais visitée : avec la jonction elle n'a que 2 liens, c'est un simple point
+        // de passage, pas une intersection. On la dépasse (sinon on y revient, déjà reliée, sans rien à y faire).
+        const fresh = !S.visited.has(ev.to) && S.points[ev.to].kind === 'normal';
         S.edges.push({ from: S.current, to: ev.to, kind: 'join' });
-        if (ev.retype) S.points[ev.to].kind = 'intersection';
+        if (fresh && rev >= 2) { S.visited.add(ev.to); S.queue = S.queue.filter(q => q !== ev.to); }
+        else {
+          if (fresh) S.preJoined.add(ev.to);
+          if (ev.retype) S.points[ev.to].kind = 'intersection';
+        }
         S.terminal[S.current] = 'join:' + ev.to; advance(); break;
+      }
       case 'split': {       // insère une intersection au milieu d'une arête, puis s'y raccorde
         const e = S.edges.find(x => x.from === ev.from && x.to === ev.to);
         addPoint(ev.id, ev.x, ev.y, 'intersection', ev.from);
@@ -89,6 +98,31 @@ function unvisitedChildren(id) { return (D.children[id] || []).filter(c => !D.vi
 function isBranching(p) { return p && (p.kind === 'start' || p.kind === 'intersection'); }
 function inWindow(x, y, c = cur(), w = project.settings.window) {
   return c && Math.abs(x - c.x) <= w / 2 && Math.abs(y - c.y) <= w / 2;
+}
+
+/* ---------- migration des projets créés avant rev 2 ---------- */
+// Avant rev 2, une amorce jointe depuis l'autre côté restait en file d'attente : on y revenait, déjà reliée,
+// et le seul moyen d'en sortir était F (cul-de-sac enregistré à tort). On retire ces F ; tout autre cas
+// (action réelle depuis ce point) ou tout écart du graphe → on garde le projet tel quel en rev 1.
+function migrateEvents(events) {
+  if (!derive(events, 1).preJoined.size) return { events, changed: false };
+  const kept = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i], S = derive(events.slice(0, i), 1);
+    const stale = S.current != null && S.preJoined.has(S.current) && !S.children[S.current].length && !S.terminal[S.current];
+    if (stale && ev.t === 'end') continue;
+    if (stale && ev.t !== 'finish') return null;
+    kept.push(ev);
+  }
+  const A = derive(events, 1), B = derive(kept, 2);
+  const shape = S => JSON.stringify([S.order.map(id => [id, S.points[id].x, S.points[id].y, S.points[id].parent]), S.edges]);
+  return shape(A) === shape(B) ? { events: kept, changed: true } : null;
+}
+function migrateProject(p) {
+  if (p.rev >= REV) return { project: p, status: 'ok' };
+  const m = migrateEvents(p.events || []);
+  if (!m) return { project: { ...p, rev: 1 }, status: 'kept' };
+  return { project: { ...p, rev: REV, events: m.events }, status: m.changed ? 'migrated' : 'ok' };
 }
 
 /* ---------- événements utilisateur ---------- */
@@ -157,6 +191,7 @@ function recenter() {
   const c = cur();
   if (c) { view.cx = c.x; view.cy = c.y; view.s = Math.min(W, H) * 0.8 / project.settings.window; }
   else if (img) { view.cx = img.width / 2; view.cy = img.height / 2; view.s = Math.min(W / img.width, H / img.height); }
+  updateHover();
   dirty = true;
 }
 function draw() {
@@ -257,15 +292,14 @@ function loop() { if (dirty) draw(); requestAnimationFrame(loop); }
 let drag = null;
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => { drag = { x: e.clientX, y: e.clientY, cx: view.cx, cy: view.cy, moved: false, btn: e.button }; });
-window.addEventListener('mousemove', e => {
+// Recalcule hover/snap depuis la dernière position écran de la souris : la vue peut avoir
+// bougé (recentrage après un clic, molette) sans que la souris ait bougé.
+let mouse = null;
+function updateHover() {
+  if (!mouse) return;
   const r = canvas.getBoundingClientRect();
-  const [mx, my] = toMap(e.clientX - r.left, e.clientY - r.top);
+  const [mx, my] = toMap(mouse.x - r.left, mouse.y - r.top);
   hover = { x: mx, y: my };
-  if (drag && drag.btn !== 2) {
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    if (Math.hypot(dx, dy) > 4) drag.moved = true;
-    if (drag.moved) { view.cx = drag.cx - dx / view.s; view.cy = drag.cy - dy / view.s; }
-  }
   snapId = null; snapEdge = null;
   const thr = 10 / view.s; let best = thr;
   for (const id of D.order) { const p = D.points[id]; const d = Math.hypot(p.x - mx, p.y - my); if (d < best && id !== D.current) { best = d; snapId = id; } }
@@ -286,11 +320,22 @@ window.addEventListener('mousemove', e => {
   }
   $('hud').textContent = img ? `x ${Math.round(mx)}  y ${Math.round(my)}  ·  zoom ×${view.s.toFixed(2)}` : '';
   dirty = true;
+}
+window.addEventListener('mousemove', e => {
+  mouse = { x: e.clientX, y: e.clientY };
+  if (drag && drag.btn !== 2) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.hypot(dx, dy) > 4) drag.moved = true;
+    if (drag.moved) { view.cx = drag.cx - dx / view.s; view.cy = drag.cy - dy / view.s; }
+  }
+  updateHover();
 });
 window.addEventListener('mouseup', e => {
   if (!drag) return;
   const d = drag; drag = null;
   if (d.moved || e.target !== canvas) return;
+  mouse = { x: e.clientX, y: e.clientY };
+  updateHover();
   if (snapId != null) { joinTo(snapId); return; }
   if (snapEdge) { splitEdge(snapEdge); return; }
   const kind = (e.button === 2 || e.shiftKey) ? 'intersection' : nextKind;
@@ -302,7 +347,8 @@ canvas.addEventListener('wheel', e => {
   const [mx, my] = toMap(sx, sy);
   view.s = Math.min(40, Math.max(0.02, view.s * Math.exp(-e.deltaY * 0.0015)));
   view.cx = mx - (sx - W / 2) / view.s; view.cy = my - (sy - H / 2) / view.s;
-  dirty = true;
+  mouse = { x: e.clientX, y: e.clientY };
+  updateHover();
 }, { passive: false });
 window.addEventListener('keydown', e => {
   if (e.target.matches('input,select,textarea')) return;
@@ -359,13 +405,13 @@ function updateUI() {
   }).join('');
   $('mapInfo').textContent = project.map ? `${project.map.name} — ${project.map.width}×${project.map.height} px${project.map.georef ? ' · géoréférencée' : ''}` : 'Aucune carte chargée.';
 }
-$('queue').addEventListener('click', e => { const li = e.target.closest('li'); if (!li) return; const p = D.points[+li.dataset.id]; view.cx = p.x; view.cy = p.y; dirty = true; });
+$('queue').addEventListener('click', e => { const li = e.target.closest('li'); if (!li) return; const p = D.points[+li.dataset.id]; view.cx = p.x; view.cy = p.y; updateHover(); });
 let saveTimer = null;
 function refresh(save) {
-  D = derive(project.events);
-  snapId = null; snapEdge = null;
+  D = derive(project.events, project.rev || 1);
   const c = cur();
   if (c && (save || !img)) recenter();
+  updateHover();
   updateUI(); dirty = true;
   if (save) { clearTimeout(saveTimer); saveTimer = setTimeout(() => idb.set('project', project), 300); }
 }
@@ -401,7 +447,10 @@ $('importFile').addEventListener('change', async e => {
     const p = JSON.parse(await f.text());
     if (p.format !== FORMAT) throw new Error('format inconnu');
     if (project.events.length && !confirm('Remplacer le projet courant ?')) return;
-    project = { format: FORMAT, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: false, ...p.settings }, events: p.events || [] };
+    const mig = migrateProject({ format: FORMAT, rev: p.rev, name: p.name || '', map: p.map || null, settings: { window: 256, allowOutside: false, ...p.settings }, events: p.events || [] });
+    project = mig.project;
+    if (mig.status === 'migrated') warn('Projet importé réparé : des « cul-de-sac » enregistrés à tort ont été retirés.');
+    if (mig.status === 'kept') warn('Projet ancien conservé tel quel (comportement d’avant la correction des jonctions).');
     syncSettingsUI();
     if (project.map) {
       const entry = mapIndex.find(m => m.id === project.map.id);
@@ -457,7 +506,16 @@ main.addEventListener('drop', e => { e.preventDefault(); main.classList.remove('
   mapIndex.forEach(m => { m.url = '../' + m.url; if (m.georef) m.georef = '../' + m.georef; });
   $('mapSelect').innerHTML += mapIndex.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
   const saved = await idb.get('project');
-  if (saved && saved.format === FORMAT) { project = { ...newProject(), ...saved, settings: { ...newProject().settings, ...saved.settings } }; }
+  if (saved && saved.format === FORMAT) {
+    const mig = migrateProject({ ...newProject(), ...saved, rev: saved.rev, settings: { ...newProject().settings, ...saved.settings } });
+    project = mig.project;
+    if (mig.status !== 'ok') {
+      if (!(await idb.get('projectBackup'))) await idb.set('projectBackup', saved);   // copie intacte avant réparation
+      await idb.set('project', project);
+      warn(mig.status === 'migrated' ? 'Projet réparé : des « cul-de-sac » enregistrés à tort ont été retirés (sauvegarde gardée).'
+                                     : 'Projet ancien conservé tel quel (comportement d’avant la correction des jonctions).');
+    }
+  }
   syncSettingsUI();
   if (project.map) {
     const entry = mapIndex.find(m => m.id === project.map.id);
