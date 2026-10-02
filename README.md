@@ -10,10 +10,11 @@ points déjà posés, et doit décider du **prochain point**. Chaque clic humain
 ## Lancer l'application
 
 ```bash
-python3 server.py            # http://127.0.0.1:8080/app/
+python3 server.py                                   # http://127.0.0.1:8080/app/ — mode manuel
+python3 server.py 8080 --model runs/v2/model.pt     # + mode assisté (le modèle propose, vous validez)
 ```
 
-Aucune dépendance : HTML/JS pur. La carte Nexus 2011 (6307 px, géoréférencée) est fournie dans `maps/` ; toute autre image
+Aucune dépendance pour le mode manuel : HTML/JS pur (le mode assisté demande `torch`/`torchvision`, voir plus bas). La carte Nexus 2011 (6307 px, géoréférencée) est fournie dans `maps/` ; toute autre image
 peut être ouverte par glisser-déposer. Le projet est sauvegardé automatiquement dans le navigateur (IndexedDB) et
 exportable en JSON.
 
@@ -38,6 +39,22 @@ direction, suivi d'une courbe). La fenêtre n'est qu'un repère visuel (le modè
 
 La taille de la fenêtre est réglable à tout moment ; elle est enregistrée avec chaque événement et peut être changée a
 posteriori à l'export (seule la séquence ordonnée des points compte).
+
+## Mode assisté (`tools/assist.py`, `/api/predict`)
+
+Case « Mode assisté » (touche `A`), disponible quand le serveur a été lancé avec `--model` et que la carte vient de la liste
+(`maps/`). À chaque point courant, le serveur suit le modèle sur « portée des propositions » px (défaut 32, pas de 4 px) et
+l'app dessine en violet :
+
+- depuis un point normal : le prochain point proposé avec sa confiance ; ou une **intersection** (plusieurs directions
+  confirmées sur deux pas) avec ses directions ; ou **cul-de-sac** ; ou **jonction** (le suivi retombe sur un segment déjà
+  tracé — à vous de cliquer le point/segment pour raccorder) ;
+- depuis le départ ou une intersection : une amorce par direction (celles déjà couvertes par une amorce posée sont omises).
+
+`Entrée` ou clic sur la proposition l'accepte ; cliquer ailleurs ou `F` corrige. Rien n'est posé sans votre décision, et le
+mode manuel reste identique. Chaque événement `place`/`end` pris en présence d'une proposition porte `prop` (liste
+`{kind, x, y, conf}`) et `accepted` ; le dérivé du graphe ignore ces champs, donc `oracle.py` apprend de vos corrections
+comme du reste, et les compteurs « propositions suivies / corrigées » mesurent le modèle en conditions réelles.
 
 ## Format des données
 
