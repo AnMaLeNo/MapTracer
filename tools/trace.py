@@ -62,12 +62,17 @@ class OracleModel:
         return G.soft_label(angles, self.K)
 
 
+class StopTrace(Exception):
+    """Levée par le `hook` d'un Tracer pour interrompre le suivi (le graphe produit jusque-là est conservé)."""
+
+
 class Tracer:
     def __init__(self, model, step, K, thr=0.5, img=None, window=128, trace_width=3, map_size=None,
                  max_steps=200000, max_branch_steps=20000, side_sep_deg=20, confirm=2, coast=2, grace=2, verbose=False,
-                 bounds=None):
+                 bounds=None, hook=None):
         self.model, self.step, self.K, self.thr = model, step, K, thr
         self.bounds = bounds        # (x0, y0, x1, y1) : le suivi s'arrête en sortant de la zone
+        self.hook = hook            # appelé à chaque pas avec le Tracer (progression) ; peut lever StopTrace
         self.img, self.W, self.trace_width, self.map_size = img, window, trace_width, map_size
         self.max_steps, self.max_branch_steps = max_steps, max_branch_steps
         self.side_sep, self.confirm, self.coast, self.grace, self.verbose = math.radians(side_sep_deg), confirm, coast, grace, verbose
@@ -146,14 +151,17 @@ class Tracer:
         return n, dirs
 
     def run(self):
-        while self.queue and self.steps < self.max_steps:
-            node, heading = self.queue.popleft()
-            x, y = self.out.xy(node)
-            x1, y1 = x + self.step * math.cos(heading), y + self.step * math.sin(heading)
-            if self.junction(x1, y1, node, [node]) is not None:        # galerie déjà tracée entre-temps
-                self.branches.append({'steps': 0, 'reason': 'junction', 'end_xy': [round(x1, 1), round(y1, 1)]})
-                continue
-            self.follow(node, heading)
+        try:
+            while self.queue and self.steps < self.max_steps:
+                node, heading = self.queue.popleft()
+                x, y = self.out.xy(node)
+                x1, y1 = x + self.step * math.cos(heading), y + self.step * math.sin(heading)
+                if self.junction(x1, y1, node, [node]) is not None:        # galerie déjà tracée entre-temps
+                    self.branches.append({'steps': 0, 'reason': 'junction', 'end_xy': [round(x1, 1), round(y1, 1)]})
+                    continue
+                self.follow(node, heading)
+        except StopTrace:
+            pass
         return self.out
 
     def follow(self, node, heading):
@@ -162,6 +170,8 @@ class Tracer:
         pending = []                                   # {'angle': abs, 'count', 'node'}
         reason, n_steps, coasting = 'max_steps', 0, 0
         while n_steps < self.max_branch_steps and self.steps < self.max_steps:
+            if self.hook:
+                self.hook(self)
             probs = self.model.predict(x, y, heading, self.crops(x, y, heading))
             pk = [p for p in self.peaks(probs) if abs(p[0]) < math.radians(135)]
             if not pk:
@@ -171,6 +181,8 @@ class Tracer:
                         if len(hist) > 1:
                             self.out.remove_edge(hist[-2], hist[-1]); del self.out.nodes[hist[-1]]
                             del self.out.adj[hist[-1]]; hist.pop(); node = hist[-1]; x, y = self.out.xy(node)
+                    if reason == 'end' and self.out.degree(node) == 1 and self.out.nodes[node]['kind'] == 'normal':
+                        self.out.nodes[node]['kind'] = 'end'        # cul-de-sac annoncé par le modèle (à vérifier)
                     break
                 coasting += 1; pk = [(0.0, 0.0)]
             else:

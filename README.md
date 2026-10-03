@@ -10,7 +10,7 @@ points déjà posés, et doit décider du **prochain point**. Chaque clic humain
 ## Lancer l'application
 
 ```bash
-python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté avec les modèles de models/
+python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté + Auto avec les modèles de models/
 python3 server.py 8080 --model runs/x/model.pt      # ajoute un model.pt isolé à la liste ; --device cuda|cpu
 ```
 
@@ -61,6 +61,50 @@ comme du reste, et les compteurs « propositions suivies / corrigées » mesuren
 La « portée » ne change **pas** le pas du modèle : le serveur avance toujours du pas d'entraînement lu dans le `.pt`
 (`meta.step`, 2 px pour le modèle v3) et enchaîne autant de petits pas que la portée le permet ; elle ne fixe que la longueur
 de la proposition affichée. Un modèle entraîné à 2 px s'utilise donc à 2 px — c'est automatique.
+
+## Mode Auto : le modèle trace tout, l'humain corrige par zones (`app/auto.js`, `/api/trace`)
+
+Bouton « Auto : le modèle trace, je corrige » en haut du panneau. Principe (*hard-example mining*) : plutôt que de réannoter
+ce que le modèle sait déjà faire, on le laisse tracer, on repère **où** il se trompe et on ne corrige que là ; chaque zone
+corrigée devient un mini-dataset d'exemples difficiles pour le prochain entraînement.
+
+1. Choisir la carte (liste) et le modèle, puis **cliquer un point de départ** sur une galerie : le serveur lance la boucle
+   complète de `tools/trace.py` en arrière-plan (`POST /api/trace`, budget « pas max », 20 000 par défaut ≈ 2 min sur CPU)
+   et l'app affiche le tracé rouge au fur et à mesure (`GET /api/trace/<job>` toutes les 0,7 s). « Arrêter le suivi » garde
+   ce qui est tracé ; « Nouveau départ » relance ailleurs **en prolongeant** le tracé existant. Les carrefours posés sont
+   cerclés d'orange, les culs-de-sac annoncés par le modèle marqués d'une croix.
+2. Inspecter, puis **Maj+glisser** autour d'une erreur : la zone (jaune) extrait le sous-graphe du tracé ; les galeries coupées
+   par le bord se terminent sur une extrémité **ouverte** (anneau pointillé) — ce n'est pas un cul-de-sac, l'oracle ignore les
+   états dont la visée l'atteint. Le tracé d'origine reste visible en gris dans la zone.
+3. Corriger les points **à la main** dans la zone : glisser = déplacer · clic = sélectionner · clic dans le vide = point suivant
+   relié au point sélectionné (ou point isolé si rien n'est sélectionné) · clic sur un segment = y insérer un point ·
+   `Ctrl`+clic sur un autre point = relier / délier · `Suppr` = supprimer · `F` = cul-de-sac ↔ ouvert (extrémité) · `I` = type
+   intersection ↔ normal · `Ctrl+Z` = annuler · `Échap` = désélectionner puis quitter la zone. Corrigez **toutes** les
+   galeries de la zone : une galerie oubliée à un carrefour, c'est une direction fausse enseignée.
+4. « Exporter les zones corrigées » → un fichier `*.mapzones.json` (toutes les zones, réimportable) :
+
+```jsonc
+{ "format": "maptracer-zones/1", "map": { "id": "nexus_alkhemia_2011", ... }, "seeds": [[4940, 3261]],
+  "zones": [ { "id": 1, "bbox": [x0, y0, x1, y1], "model": "v4-w128-k32", "edits": 12,
+               "nodes": [ { "id": 1, "x": 4931.5, "y": 3250, "kind": "normal|intersection|end", "open": false }, ... ],
+               "edges": [[1, 2], ...],
+               "auto": { "nodes": [...], "edges": [...] } } ] }      // le tracé du modèle avant correction, pour mémoire
+```
+
+Un nœud de degré 1 est un cul-de-sac **seulement** s'il est de type `end` ; tout autre nœud de degré 1 (`open`) est une
+extrémité ouverte. Ces fichiers se donnent à l'oracle **avec** les gros projets ; leurs états reçoivent `--zone-aug` copies
+perturbées (6 par défaut, contre `--aug` 2 pour les projets), ce qui les pèse ~2,3× plus :
+
+```bash
+python3 tools/oracle.py data/nexus_alkhemia_2011.maptracer.json data/nexus_alkhemia_2011-0202.maptracer.json \
+        zones/*.mapzones.json maps/nexus_alkhemia_2011.jpg -o oracle_v5/ --window 128 --step 2 --lookahead 6 --near 6 \
+        --holdout 4200,3200,5800,3600 --holdout 3000,2500,4100,2900
+python3 tools/train.py oracle_v5/ -o runs/v5 --epochs 30
+```
+
+`meta.json` liste les entrées (`inputs`) et le nombre d'exemples par entrée (`counts.by_input`). Une zone qui tombe dans une
+zone de validation `--holdout` alimente la validation, pas l'entraînement. Le mode Auto ne rend pas le modèle autonome :
+c'est l'outil qui mesure ses erreurs et les transforme en données.
 
 ## Format des données
 
