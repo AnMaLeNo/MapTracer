@@ -213,3 +213,12 @@ contre une annotation incomplète (le modèle suit vers Port-Mahon une galerie d
 fausse) ; les carrefours manqués sont surtout les petits embranchements rapprochés du bd Saint-Jacques. Ce n'est pas encore
 un traceur autonome : il sert à proposer, l'humain valide.
 
+### Campagne v4 (deux projets, 2 980 points) — voir `models/COMPARAISON.md`
+
+Six variantes entraînées sur les deux gros projets (`nexus_alkhemia_2011` + `nexus_alkhemia_2011-0202`) avec deux zones de
+validation (une par projet) : fenêtres 96 / 128 / 192, 32 / 64 secteurs, avec / sans états sur les traits bleus (étages
+inférieurs), deux graines. Résumé : ce sont les **données** qui améliorent le suivi (zone 0202 : couverture au premier
+départ 69 → 97 %, carrefours 12 → 15/20 posés à 3 px), pas les hyperparamètres ; le bruit de graine en suivi réel est du
+même ordre que les écarts entre variantes ; retirer les états bleus n'apporte rien. Les poids (float16) et une note par
+modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`.
+
