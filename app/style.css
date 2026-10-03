@@ -41,3 +41,10 @@ kbd{float:right;background:#0f1216;border:1px solid var(--line);border-radius:4p
 #main.dragover #drop{display:flex}
 .prop{display:inline-block;background:#0f1216;border:1px solid var(--prop);border-radius:10px;padding:0 7px;margin:2px 2px 0 0;color:var(--fg)}
 #assistInfo{margin-top:4px;min-height:16px}
+.seg{display:flex;gap:0;margin-bottom:8px}
+.seg button{flex:1;text-align:center;border-radius:0;font-size:12px;padding:6px 4px}
+.seg button:first-child{border-radius:6px 0 0 6px} .seg button:last-child{border-radius:0 6px 6px 0}
+.seg button.active{background:#3a2a1a;border-color:var(--acc);color:var(--acc)}
+body[data-mode=auto] .mode-trace{display:none} body[data-mode=trace] .mode-auto{display:none}
+.list li.active{color:var(--acc)}
+#main.arm #view{cursor:cell}
