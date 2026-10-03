@@ -10,11 +10,12 @@ points déjà posés, et doit décider du **prochain point**. Chaque clic humain
 ## Lancer l'application
 
 ```bash
-python3 server.py                                   # http://127.0.0.1:8080/app/ — mode manuel
-python3 server.py 8080 --model runs/v2/model.pt     # + mode assisté (le modèle propose, vous validez)
+python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté avec les modèles de models/
+python3 server.py 8080 --model runs/x/model.pt      # ajoute un model.pt isolé à la liste ; --device cuda|cpu
 ```
 
-Aucune dépendance pour le mode manuel : HTML/JS pur (le mode assisté demande `torch`/`torchvision`, voir plus bas). La carte Nexus 2011 (6307 px, géoréférencée) est fournie dans `maps/` ; toute autre image
+Les modèles livrés sont dans `models/<nom>/` (`model.pt` en float16 + `NOTES.md` : stratégie, résultats, limites) ; le
+serveur les liste et l'app les propose dans le menu « Modèle » (voir `models/README.md`). Aucune dépendance pour le mode manuel : HTML/JS pur (le mode assisté demande `torch`/`torchvision`, voir plus bas). La carte Nexus 2011 (6307 px, géoréférencée) est fournie dans `maps/` ; toute autre image
 peut être ouverte par glisser-déposer. Le projet est sauvegardé automatiquement dans le navigateur (IndexedDB) et
 exportable en JSON.
 
@@ -42,8 +43,9 @@ posteriori à l'export (seule la séquence ordonnée des points compte).
 
 ## Mode assisté (`tools/assist.py`, `/api/predict`)
 
-Case « Mode assisté » (touche `A`), disponible quand le serveur a été lancé avec `--model` et que la carte vient de la liste
-(`maps/`). À chaque point courant, le serveur suit le modèle sur « portée des propositions » px (défaut 32) et l'app dessine
+Case « Mode assisté » (touche `A`), disponible quand le serveur a au moins un modèle (`models/` ou `--model`) et que la carte
+vient de la liste (`maps/`). Le menu « Modèle » choisit celui qui propose (chargé à la première demande, gardé en mémoire ;
+le choix est enregistré dans le projet et envoyé à chaque requête `/api/predict` dans `model`). À chaque point courant, le serveur suit le modèle sur « portée des propositions » px (défaut 32) et l'app dessine
 en violet :
 
 - depuis un point normal : le prochain point proposé avec sa confiance ; ou une **intersection** (plusieurs directions
@@ -210,4 +212,13 @@ confiance ; trop petit pour conclure.
 contre une annotation incomplète (le modèle suit vers Port-Mahon une galerie dessinée mais non annotée, comptée comme
 fausse) ; les carrefours manqués sont surtout les petits embranchements rapprochés du bd Saint-Jacques. Ce n'est pas encore
 un traceur autonome : il sert à proposer, l'humain valide.
+
+### Campagne v4 (deux projets, 2 980 points) — voir `models/COMPARAISON.md`
+
+Six variantes entraînées sur les deux gros projets (`nexus_alkhemia_2011` + `nexus_alkhemia_2011-0202`) avec deux zones de
+validation (une par projet) : fenêtres 96 / 128 / 192, 32 / 64 secteurs, avec / sans états sur les traits bleus (étages
+inférieurs), deux graines. Résumé : ce sont les **données** qui améliorent le suivi (zone 0202 : couverture au premier
+départ 69 → 97 %, carrefours 12 → 15/20 posés à 3 px), pas les hyperparamètres ; le bruit de graine en suivi réel est du
+même ordre que les écarts entre variantes ; retirer les états bleus n'apporte rien. Les poids (float16) et une note par
+modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`.
 

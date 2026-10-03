@@ -25,7 +25,7 @@ const idb = {
 /* ---------- projet ---------- */
 let project = newProject();
 function newProject() {
-  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: true, assist: false, proposeDist: 32 }, events: [] };
+  return { format: FORMAT, rev: REV, name: '', map: null, settings: { window: 256, allowOutside: true, assist: false, proposeDist: 32, model: '' }, events: [] };
 }
 let img = null;           // ImageBitmap de la carte
 let mapIndex = [];        // maps/index.json
@@ -158,7 +158,7 @@ async function requestProposal() {
   try {
     const r = await fetch('../api/predict', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ map: entry.url.replace(/^\.\.\//, ''), x: c.x, y: c.y, heading: currentHeading(c), branching: isBranching(c),
-                             dist: project.settings.proposeDist, segs }) });
+                             dist: project.settings.proposeDist, segs, model: project.settings.model || undefined }) });
     const res = await r.json();
     if (seq !== propSeq) return;
     if (!r.ok) return updateAssistInfo('Modèle indisponible : ' + (res.error || r.status));
@@ -169,11 +169,22 @@ async function requestProposal() {
     prop = res; dirty = true; updateAssistInfo();
   } catch (err) { if (seq === propSeq) updateAssistInfo('Erreur : ' + err.message); }
 }
+function currentModel() {
+  const list = (modelInfo && modelInfo.models || []).filter(m => !m.error);
+  return list.find(m => m.name === project.settings.model) || list[0] || null;
+}
+function syncModelUI() {
+  const list = (modelInfo && modelInfo.models || []);
+  $('modelSelect').innerHTML = list.length ? list.map(m => `<option value="${m.name}"${m.error ? ' disabled' : ''}>${m.name}${m.title ? ' — ' + m.title : ''}${m.error ? ' (erreur)' : ''}</option>`).join('')
+                                           : '<option value="">(aucun)</option>';
+  const cm = currentModel(); $('modelSelect').value = cm ? cm.name : '';
+}
 function updateAssistInfo(msg) {
   const el = $('assistInfo');
   if (msg) { el.textContent = msg; return; }
-  if (!project.settings.assist) { el.textContent = modelInfo && modelInfo.available ? `Modèle prêt (${modelInfo.device}).` : 'Mode manuel.'; return; }
-  if (!prop) { el.textContent = modelInfo && modelInfo.available ? 'Aucune proposition.' : 'Modèle indisponible : lancez server.py --model …'; return; }
+  const cm = currentModel();
+  if (!project.settings.assist) { el.textContent = cm ? `Modèle ${cm.name} prêt (${modelInfo.device}${cm.meta ? `, pas ${cm.meta.step} px, fenêtre ${cm.meta.window}, ${cm.meta.sectors} secteurs` : ''}).` : 'Mode manuel.'; return; }
+  if (!prop) { el.textContent = cm ? 'Aucune proposition.' : 'Modèle indisponible : dossier models/ vide ou server.py --model …'; return; }
   const names = { normal: 'point normal', intersection: 'intersection', end: 'cul-de-sac', junction: 'jonction' };
   if (!prop.items.length) { el.textContent = 'Le modèle ne voit aucune direction nouvelle (F si cul-de-sac).'; return; }
   el.innerHTML = prop.items.map(it => `<span class="prop">${names[it.kind]} <b>${Math.round(it.conf * 100)} %</b>` +
@@ -522,6 +533,7 @@ function refresh(save) {
   if (save) { clearTimeout(saveTimer); saveTimer = setTimeout(() => idb.set('project', project), 300); }
 }
 $('assist').addEventListener('change', () => { project.settings.assist = $('assist').checked; refresh(true); });
+$('modelSelect').addEventListener('change', () => { project.settings.model = $('modelSelect').value; refresh(true); });
 $('proposeDist').addEventListener('change', () => { project.settings.proposeDist = Math.max(8, +$('proposeDist').value || 32); $('proposeDist').value = project.settings.proposeDist; refresh(true); });
 $('btnAccept').onclick = () => acceptProposal();
 $('winSize').addEventListener('change', () => { project.settings.window = Math.max(32, +$('winSize').value || 256); $('winSize').value = project.settings.window; refresh(true); });
@@ -573,6 +585,7 @@ $('importFile').addEventListener('change', async e => {
 function syncSettingsUI() {
   $('winSize').value = project.settings.window; $('allowOutside').checked = project.settings.allowOutside; $('projName').value = project.name || '';
   $('assist').checked = !!project.settings.assist; $('proposeDist').value = project.settings.proposeDist || 32;
+  syncModelUI();
 }
 
 /* ---------- chargement des cartes ---------- */

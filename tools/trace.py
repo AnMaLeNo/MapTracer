@@ -287,16 +287,41 @@ def components(ref):
     return comps
 
 
-def compare(ref, out, tol):
+def farthest_uncovered(ref, out, min_dist):
+    """Nœud de degré 2 de la référence le plus éloigné du tracé produit (None si tout est à moins de `min_dist`)."""
+    nodes = [n for n in ref.nodes if ref.degree(n) == 2]
+    if not nodes:
+        return None
+    d = dist_to_segments(np.array([ref.xy(n) for n in nodes]), out)
+    i = int(d.argmax())
+    return nodes[i] if d[i] >= min_dist else None
+
+
+def compare(ref, out, tol, ref_full=None, bbox=None, extra_tols=(3.0, 6.0)):
+    """Couverture / précision à `tol` px (et à chaque tolérance de `extra_tols` dans `at_tol`), carrefours retrouvés
+    (à 3×tol) et écart médian entre un carrefour de référence et le carrefour posé le plus proche.
+    La précision ne juge que les points produits dans `bbox` et les confronte à `ref_full` (toute l'annotation, pas
+    seulement la zone) : ce qui est tracé hors zone n'a pas de référence et n'est pas noté."""
     Pr, Po = sample_edges(ref), sample_edges(out)
-    cov = float((dist_to_segments(Pr, out) <= tol).mean()) if len(Pr) else 0.0
-    prec = float((dist_to_segments(Po, ref) <= tol).mean()) if len(Po) else 0.0
+    in_zone = 1.0
+    if bbox is not None and len(Po):
+        x0, y0, x1, y1 = bbox
+        keep = (Po[:, 0] >= x0) & (Po[:, 0] <= x1) & (Po[:, 1] >= y0) & (Po[:, 1] <= y1)
+        in_zone = float(keep.mean()); Po = Po[keep]
+    d_ref = dist_to_segments(Pr, out) if len(Pr) else None
+    d_out = dist_to_segments(Po, ref_full if ref_full is not None else ref) if len(Po) else None
+    cov = lambda t: float((d_ref <= t).mean()) if d_ref is not None else 0.0
+    prec = lambda t: float((d_out <= t).mean()) if d_out is not None else 0.0
     ref_i = [n for n in ref.nodes if ref.degree(n) >= 3]
     out_i = [n for n in out.nodes if out.degree(n) >= 3]
-    matched = sum(1 for n in ref_i if any(math.dist(ref.xy(n), out.xy(m)) <= 3 * tol for m in out_i))
-    return {'tolerance_px': tol, 'coverage': round(cov, 4), 'precision': round(prec, 4),
+    gaps = sorted(min((math.dist(ref.xy(n), out.xy(m)) for m in out_i), default=math.inf) for n in ref_i)
+    matched = sum(1 for g in gaps if g <= 3 * tol)
+    return {'tolerance_px': tol, 'coverage': round(cov(tol), 4), 'precision': round(prec(tol), 4),
+            'at_tol': {str(t): {'coverage': round(cov(t), 4), 'precision': round(prec(t), 4)} for t in extra_tols},
             'ref_length_px': round(ref.total_length(), 1), 'out_length_px': round(out.total_length(), 1),
-            'ref_intersections': len(ref_i), 'out_intersections': len(out_i), 'intersections_matched': matched}
+            'out_length_in_zone_px': round(out.total_length() * in_zone, 1),
+            'ref_intersections': len(ref_i), 'out_intersections': len(out_i), 'intersections_matched': matched,
+            'junction_gap_median_px': round(gaps[len(gaps) // 2], 2) if gaps and gaps[len(gaps) // 2] < math.inf else None}
 
 
 def render(img, ref, out, path, margin=40, scale=1):
@@ -334,6 +359,8 @@ def main():
     ap.add_argument('--coast', type=int, default=2, help='pas tout droit tolérés sans réponse avant de conclure à une fin')
     ap.add_argument('--seed', action='append', help="x,y[,cap_deg] (répétable ; défaut : point de départ du projet) "
                     "ou 'auto' : un départ par composante connexe de la référence (utile avec --bbox)")
+    ap.add_argument('--reseed', type=int, default=0, help='après le suivi, repartir jusqu’à N fois du point de la '
+                    'référence le plus loin du tracé (mesure la couverture selon le nombre de départs)')
     ap.add_argument('--noise-deg', type=float, default=0.0, help='bruit gaussien sur les directions de l’oracle')
     ap.add_argument('--drop', type=float, default=0.0, help='probabilité d’oublier une direction (oracle)')
     ap.add_argument('--snap', type=float, help='oracle : distance max à l’axe avant d’être « perdu » (défaut 2×pas)')
@@ -379,21 +406,32 @@ def main():
     for x, y, h in seeds:
         tr.seed(x, y, h)
     out = tr.run()
+    tol = 1.5 * args.step
+    cov_by_seed = [compare(ref, out, tol, ref_full, bbox)['coverage']]
+    for _ in range(args.reseed):
+        n = farthest_uncovered(ref, out, 6 * args.step)
+        if n is None:
+            break
+        tr.seed(*ref.xy(n), None); seeds.append((*ref.xy(n), None))
+        out = tr.run()
+        cov_by_seed.append(compare(ref, out, tol, ref_full, bbox)['coverage'])
 
     os.makedirs(args.out, exist_ok=True)
     json.dump(out.to_dict(), open(os.path.join(args.out, 'trace_graph.json'), 'w'))
     g = (proj.get('map') or {}).get('georef')
     if g:
         json.dump(out.to_geojson(g), open(os.path.join(args.out, 'trace_graph.geojson'), 'w'))
-    rep = compare(ref, out, 1.5 * args.step)
+    rep = compare(ref, out, tol, ref_full, bbox)
     reasons = {}
     for b in tr.branches:
         reasons[b['reason']] = reasons.get(b['reason'], 0) + 1
-    rep.update({'steps': tr.steps, 'branches': len(tr.branches), 'branch_ends': reasons,
+    rep.update({'steps': tr.steps, 'branches': len(tr.branches), 'branch_ends': reasons, 'branch_list': tr.branches,
+                'seeds': [[round(x, 1), round(y, 1)] for x, y, _ in seeds], 'coverage_by_seed': cov_by_seed,
                 'params': {k: v for k, v in vars(args).items() if k not in ('project', 'image', 'out')}})
     json.dump(rep, open(os.path.join(args.out, 'report.json'), 'w'), indent=1, ensure_ascii=False)
     render(img, ref, out, os.path.join(args.out, 'debug.png'), scale=args.render_scale)
-    print(f"{tr.steps} pas, {len(tr.branches)} branches {reasons} ; couverture {rep['coverage']:.1%}, "
+    print(f"{tr.steps} pas, {len(tr.branches)} branches {reasons} ; {len(seeds)} départ(s) "
+          f"(couverture par départ {[round(c, 3) for c in cov_by_seed]}) ; couverture {rep['coverage']:.1%}, "
           f"précision {rep['precision']:.1%}, intersections {rep['intersections_matched']}/{rep['ref_intersections']} "
           f"(trouvées {rep['out_intersections']}) → {args.out}/")
 
