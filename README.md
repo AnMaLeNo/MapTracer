@@ -43,8 +43,8 @@ posteriori à l'export (seule la séquence ordonnée des points compte).
 ## Mode assisté (`tools/assist.py`, `/api/predict`)
 
 Case « Mode assisté » (touche `A`), disponible quand le serveur a été lancé avec `--model` et que la carte vient de la liste
-(`maps/`). À chaque point courant, le serveur suit le modèle sur « portée des propositions » px (défaut 32, pas de 4 px) et
-l'app dessine en violet :
+(`maps/`). À chaque point courant, le serveur suit le modèle sur « portée des propositions » px (défaut 32) et l'app dessine
+en violet :
 
 - depuis un point normal : le prochain point proposé avec sa confiance ; ou une **intersection** (plusieurs directions
   confirmées sur deux pas) avec ses directions ; ou **cul-de-sac** ; ou **jonction** (le suivi retombe sur un segment déjà
@@ -55,6 +55,10 @@ l'app dessine en violet :
 mode manuel reste identique. Chaque événement `place`/`end` pris en présence d'une proposition porte `prop` (liste
 `{kind, x, y, conf}`) et `accepted` ; le dérivé du graphe ignore ces champs, donc `oracle.py` apprend de vos corrections
 comme du reste, et les compteurs « propositions suivies / corrigées » mesurent le modèle en conditions réelles.
+
+La « portée » ne change **pas** le pas du modèle : le serveur avance toujours du pas d'entraînement lu dans le `.pt`
+(`meta.step`, 2 px pour le modèle v3) et enchaîne autant de petits pas que la portée le permet ; elle ne fixe que la longueur
+de la proposition affichée. Un modèle entraîné à 2 px s'utilise donc à 2 px — c'est automatique.
 
 ## Format des données
 
@@ -114,19 +118,24 @@ Le tracé manuel sert de **vérité** ; le modèle appris n'imite pas les clics 
   plus un canal monochrome des **galeries déjà tracées**.
 - **Sortie** : `K = 32` secteurs angulaires (secteur 0 = tout droit, sens horaire), **multi-label** : chaque secteur a sa
   propre probabilité, plusieurs secteurs actifs ⇔ intersection, **aucun secteur actif ⇔ cul-de-sac**.
-- **Déplacement** : toujours du même **pas fixe** (`--step`, 4 px ≈ 2 m sur Nexus), aucune largeur à estimer.
+- **Déplacement** : toujours du même **pas fixe** (`--step`, 2 px ≈ 1 m sur Nexus), aucune largeur à estimer.
 
 ### Génération des exemples
 
 ```bash
-python3 tools/oracle.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --window 128 --step 4 \
-        [--aug 2 --offset 3 --heading-noise 25 --holdout x0,y0,x1,y1]
+python3 tools/oracle.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --window 128 --step 2 \
+        [--lookahead 6 --near 6 --bend-deg 45 --aug 2 --offset 1.5 --heading-noise 25 --holdout x0,y0,x1,y1]
 ```
 
 Pour chaque arête du graphe, dans les deux sens, une position tous les `--spacing` px (défaut = pas), dupliquée `--aug`
-fois avec un décalage latéral (`--offset`) et une erreur de cap (`--heading-noise`) pour apprendre le recentrage. La cible
-est l'ensemble des secteurs contenant un point de l'axe à `--lookahead` px (défaut 4 × pas) le long du graphe, une branche =
-un secteur (étiquettes douces gaussiennes dans `label`, secteurs entiers dans `sectors`). Le canal « déjà tracé » contient
+fois avec un décalage latéral (`--offset`, défaut 0,75 × pas) et une erreur de cap (`--heading-noise`) pour apprendre le
+recentrage. La cible est l'ensemble des secteurs contenant un point de l'axe à `--lookahead` px (défaut 3 × pas) le long du
+graphe, une branche = un secteur (étiquettes douces gaussiennes dans `label`, secteurs entiers dans `sectors`). La visée est
+**nette** : si un carrefour (degré ≥ 3) ou un virage serré (> `--bend-deg`) se trouve à plus de `--near` px (défaut 3 × pas),
+la cible est ce point-là — on y va tout droit — et c'est seulement à moins de `--near` px que les directions se séparent
+(cibles à `--lookahead` px *du carrefour* sur chaque branche). Sans cela, une visée longue « coupe » les coins : le modèle
+apprend à tourner avant le virage et à annoncer l'intersection trop tôt (défaut du modèle v2, pas 4 px / visée 16 px, sur une
+annotation dont l'arête médiane fait 5,7 px). Le canal « déjà tracé » contient
 l'arête derrière la position, parfois d'autres arêtes déjà explorées (le modèle doit savoir ne pas repartir dessus).
 Sortie : `map/NNNNNN.png`, `trace/NNNNNN.png`, `samples.jsonl` (+ `samples_val.jsonl` si `--holdout`, découpage **spatial**),
 `meta.json`, `graph.json`.
@@ -138,12 +147,13 @@ cul-de-sac : la galerie continue probablement. Les états dont la visée atteint
 ### Boucle de suivi avec faux modèle
 
 ```bash
-python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o trace/ --step 4 [--noise-deg 8 --drop 0.05]
+python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o trace/ --step 2 [--noise-deg 8 --drop 0.05]
 ```
 
 `trace.py` est la boucle qui exploitera le modèle appris : pas fixe, suivi du secteur le plus proche du cap, ouverture d'une
-branche par secteur latéral confirmé (`--confirm` observations), raccord au tracé existant (jonction, insertion d'un nœud sur
-une arête), arrêt quand aucun secteur n'est actif (`--coast` pas tolérés), sortie de carte. Pour l'instant le seul modèle
+branche par secteur latéral confirmé (`--confirm` observations consécutives) — le carrefour est posé **là où la direction
+latérale a été vue en dernier**, c'est-à-dire au nœud lui-même, pas au premier pas où elle apparaît —, raccord au tracé
+existant (jonction, insertion d'un nœud sur une arête), arrêt quand aucun secteur n'est actif (`--coast` pas tolérés), sortie de carte. Pour l'instant le seul modèle
 est l'**oracle** (`--model oracle`), qui lit les directions dans le tracé manuel et peut être dégradé (`--noise-deg`,
 `--drop`) pour tester la robustesse de la boucle ; `--model chemin/model.pt` branche le modèle appris (ci-dessous) et
 `--bbox x0,y0,x1,y1` limite le suivi et la comparaison à une zone (la zone de validation). Elle écrit `trace_graph.json` (+ `.geojson`), `report.json` (couverture,
@@ -177,16 +187,24 @@ dans `trace.py` et appariés aux directions cibles à ±17° → précision/rapp
 rappel aux intersections, erreur angulaire moyenne. Le meilleur F1 est sauvegardé. La vraie mesure reste `trace.py`
 (couverture, précision, intersections) sur une zone jamais vue.
 
-### Premier résultat (Nexus 2011, 1 138 points annotés, zone de validation sud `4200,3200,5800,3600`)
+### Résultats (Nexus 2011, 1 138 points annotés, zone de validation sud `4200,3200,5800,3600`)
 
-Entraînement sur RTX 3080 : 10 263 exemples, 30 époques (3,6 s/époque). Validation (exemples) : précision des directions
-98 %, rappel 90 %, erreur angulaire 2,5°, cul-de-sac 70 %, rappel aux intersections 67 %. Suivi réel avec `trace.py
---bbox … --seed auto` (un départ par composante de la référence), tolérance 6 px :
+Entraînement sur RTX 3080, 30 époques. **v2** : pas 4 px, visée 16 px, 10 263 exemples (3,6 s/époque) — validation
+(exemples) : précision des directions 98 %, rappel 90 %, erreur angulaire 2,5°, cul-de-sac 70 %, rappel aux intersections
+67 %. **v3** : pas 2 px, visée nette 6 px (`--near 6`), 25 707 exemples (8,7 s/époque) — précision 98 %, rappel 96 %, F1 0,973
+(v2 : 0,941), erreur angulaire 3,4° (cibles trois fois plus proches, donc angles plus sensibles), cul-de-sac 78 %, rappel aux
+intersections 79 %. Suivi réel avec `trace.py --bbox … --seed auto` (un départ par composante de la référence), tolérance 6 px
+(et 3 px entre parenthèses) ; « écart carrefours » = distance médiane entre un carrefour de référence et le carrefour posé :
 
-| modèle | couverture | précision | intersections |
-|---|---|---|---|
-| oracle (borne haute de la mécanique) | 100 % | 98,5 % | 15/15 |
-| ResNet-18 v2 | 93,8 % | 86,0 % | 8/15 |
+| modèle | couverture | précision | intersections | écart carrefours |
+|---|---|---|---|---|
+| oracle (borne haute de la mécanique) | 100 % (99,8 %) | 98,2 % (97,7 %) | 15/15 | 1,5 px |
+| ResNet-18 v2 (pas 4, visée 16) | 93,8 % (86,6 %) | 86,0 % (80,7 %) | 8/15 | 5,0 px |
+| ResNet-18 v3 (pas 2, visée nette 6) | 94,4 % (92,2 %) | 86,8 % (85,5 %) | 11/15 | 1,5 px |
+
+Sur un second tracé jamais vu (`nexus_alkhemia_2011-02`, 137 points, 8 carrefours, bande étroite dont les branches sortent
+de la zone) : v2 71,7 % / 63,6 % / 4/8, v3 59,6 % / 79,5 % / 2/8 — v3 est plus précis mais s'arrête plus souvent faute de
+confiance ; trop petit pour conclure.
 
 À lire avec prudence : une seule carte, une seule zone (1 400 px de galeries, 15 carrefours) ; la « précision » est mesurée
 contre une annotation incomplète (le modèle suit vers Port-Mahon une galerie dessinée mais non annotée, comptée comme
