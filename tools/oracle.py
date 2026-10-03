@@ -9,9 +9,11 @@ une branche = un secteur ; aucun secteur actif ⇔ cul-de-sac à moins d'un pas 
 
 Sortie : <out>/map/NNNNNN.png (RGB, fenêtre tournée), <out>/trace/NNNNNN.png (L, déjà tracé), <out>/samples.jsonl,
 <out>/meta.json, <out>/graph.json ; avec --holdout x0,y0,x1,y1 les états dont l'axe tombe dans ce rectangle vont dans
-samples_val.jsonl (découpage spatial, pas aléatoire).
+samples_val.jsonl (découpage spatial, pas aléatoire). Plusieurs projets (zones distinctes de la même carte) peuvent être
+donnés ; --holdout est répétable (une zone par projet, par exemple). --skip-blue ignore les états dont l'axe est sur un
+trait bleu (étages inférieurs de Nexus), pour entraîner sur les étages supérieurs seuls.
 
-Exemple : python3 tools/oracle.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --window 128 --step 4
+Exemple : python3 tools/oracle.py p1.maptracer.json p2.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --step 2
 """
 import argparse, json, math, os, random, sys
 
@@ -38,8 +40,22 @@ def iter_states(g, spacing, rng):
                 yield u, v, d / L
 
 
+def blue_ratio(img, x, y, r=3):
+    """Part de pixels « bleus » (trait d'étage inférieur sur Nexus) dans le carré (2r+1)² autour de (x, y)."""
+    n = tot = 0
+    for i in range(-r, r + 1):
+        for j in range(-r, r + 1):
+            px, py = int(round(x)) + i, int(round(y)) + j
+            if 0 <= px < img.width and 0 <= py < img.height:
+                R, Gc, B = img.getpixel((px, py))
+                n += B > R + 25 and B > Gc + 10; tot += 1
+    return n / tot if tot else 0.0
+
+
 def make_sample(g, img, a, b, t, args, rng, perturb):
     ax, ay = g.lerp(a, b, t)
+    if args.skip_blue and blue_ratio(img, ax, ay) > args.skip_blue:
+        return 'blue'
     bx, by = g.xy(b); ax0, ay0 = g.xy(a)
     heading0 = math.atan2(by - ay0, bx - ax0)
     off = rng.uniform(-args.offset, args.offset) if perturb else 0.0
@@ -63,7 +79,7 @@ def make_sample(g, img, a, b, t, args, rng, perturb):
         'edge': [a, b], 't': round(t, 4),
         'targets': [{'x': round(q['x'], 2), 'y': round(q['y'], 2), 'angle_deg': round(math.degrees(an), 2),
                      'dead_end': q['dead']} for q, an in zip(pts, angles)],
-        'sectors': sectors, 'label': G.soft_label(angles, args.sectors), 'end': not sectors,
+        'sectors': sectors, 'label': G.soft_label(angles, args.sectors, args.sigma), 'end': not sectors,
         'traced_extra': extra,
     }
     return crop, traced, row
@@ -71,7 +87,7 @@ def make_sample(g, img, a, b, t, args, rng, perturb):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('project'); ap.add_argument('image')
+    ap.add_argument('inputs', nargs='+', metavar='PROJET… IMAGE', help='un ou plusieurs projets .maptracer.json puis l’image')
     ap.add_argument('-o', '--out', default='oracle')
     ap.add_argument('--window', type=int, default=128, help='taille de la fenêtre (px carte)')
     ap.add_argument('--step', type=float, default=4, help='pas fixe du suivi (px) : cul-de-sac si fin < 1 pas')
@@ -79,12 +95,15 @@ def main():
     ap.add_argument('--near', type=float, help='rayon (px) autour d’un carrefour / virage serré où la visée le traverse (défaut 3×pas)')
     ap.add_argument('--bend-deg', type=float, default=45, help='virage considéré comme serré (°) : la visée s’y arrête')
     ap.add_argument('--sectors', type=int, default=32)
+    ap.add_argument('--sigma', type=float, help='largeur des étiquettes douces (secteurs, défaut 0,7×K/32 : même angle quel que soit K)')
+    ap.add_argument('--skip-blue', type=float, nargs='?', const=0.25, default=0.0, metavar='RATIO',
+                    help='ignorer les états sur un trait bleu (étage inférieur) : part de pixels bleus > RATIO (défaut 0,25)')
     ap.add_argument('--spacing', type=float, help='distance entre positions le long des arêtes (défaut = pas)')
     ap.add_argument('--aug', type=int, default=2, help='copies perturbées par position (en plus de la copie exacte)')
     ap.add_argument('--offset', type=float, help='décalage latéral max (px, défaut 0,75×pas)')
     ap.add_argument('--heading-noise', type=float, default=25, help='erreur de cap max (°)')
     ap.add_argument('--trace-width', type=int, default=3, help='épaisseur du canal déjà tracé (px)')
-    ap.add_argument('--holdout', help='x0,y0,x1,y1 (px carte) : zone de validation')
+    ap.add_argument('--holdout', action='append', default=[], help='x0,y0,x1,y1 (px carte) : zone de validation (répétable)')
     ap.add_argument('--no-images', action='store_true', help='n’écrire que le JSONL')
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
@@ -92,35 +111,45 @@ def main():
     args.spacing = args.spacing or args.step
     args.near = args.near if args.near is not None else 3 * args.step
     args.offset = args.offset if args.offset is not None else 0.75 * args.step
+    args.sigma = args.sigma if args.sigma is not None else 0.7 * args.sectors / 32
+    args.projects, args.image = args.inputs[:-1], args.inputs[-1]
+    del args.inputs
     rng = random.Random(args.seed)
 
-    proj = G.load_project(args.project)
-    g = G.graph_from_project(proj)
     img = Image.open(args.image).convert('RGB')
-    if proj.get('map') and (img.width, img.height) != (proj['map']['width'], proj['map']['height']):
-        raise SystemExit(f"image {img.size} ≠ carte du projet {proj['map']['width']}×{proj['map']['height']}")
-    hold = [float(v) for v in args.holdout.split(',')] if args.holdout else None
+    graphs = []
+    for path in args.projects:
+        proj = G.load_project(path)
+        if proj.get('map') and (img.width, img.height) != (proj['map']['width'], proj['map']['height']):
+            raise SystemExit(f"image {img.size} ≠ carte du projet {path} {proj['map']['width']}×{proj['map']['height']}")
+        graphs.append(G.graph_from_project(proj))
+    holds = [[float(v) for v in h.split(',')] for h in args.holdout]
+    in_hold = lambda x, y: any(h[0] <= x <= h[2] and h[1] <= y <= h[3] for h in holds)
     os.makedirs(args.out, exist_ok=True)
     if not args.no_images:
         os.makedirs(os.path.join(args.out, 'map'), exist_ok=True)
         os.makedirs(os.path.join(args.out, 'trace'), exist_ok=True)
     f_tr = open(os.path.join(args.out, 'samples.jsonl'), 'w', encoding='utf-8')
-    f_va = open(os.path.join(args.out, 'samples_val.jsonl'), 'w', encoding='utf-8') if hold else None
-    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0, 'skipped_open': 0}
+    f_va = open(os.path.join(args.out, 'samples_val.jsonl'), 'w', encoding='utf-8') if holds else None
+    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0, 'skipped_open': 0, 'skipped_blue': 0}
     i = 0
-    for a, b, t in iter_states(g, args.spacing, rng):
+    states = [(gi, a, b, t) for gi, g in enumerate(graphs) for a, b, t in iter_states(g, args.spacing, rng)]
+    for gi, a, b, t in states:
+        g = graphs[gi]
         for k in range(1 + args.aug):
             smp = make_sample(g, img, a, b, t, args, rng, perturb=k > 0)
             if smp is None:
                 n['skipped_open'] += 1; continue
+            if smp == 'blue':
+                n['skipped_blue'] += 1; break
             crop, traced, row = smp
-            row['sample'] = i
+            row['sample'] = i; row['project'] = gi
             if not args.no_images:
                 name = f'{i:06d}.png'
                 crop.save(os.path.join(args.out, 'map', name)); traced.save(os.path.join(args.out, 'trace', name))
                 row['image'] = f'map/{name}'; row['trace'] = f'trace/{name}'
             ax, ay = row['axis_pos']
-            val = hold and hold[0] <= ax <= hold[2] and hold[1] <= ay <= hold[3]
+            val = in_hold(ax, ay)
             (f_va if val else f_tr).write(json.dumps(row, ensure_ascii=False) + '\n')
             n['val' if val else 'train'] += 1
             n['end'] += row['end']; n['multi'] += len(row['sectors']) > 1
@@ -128,12 +157,14 @@ def main():
     f_tr.close()
     if f_va:
         f_va.close()
-    json.dump({'params': vars(args), 'graph_length_px': round(g.total_length(), 1), 'counts': n,
+    total_len = sum(g.total_length() for g in graphs); n_edges = sum(len(g.edges) for g in graphs)
+    json.dump({'params': vars(args), 'graph_length_px': round(total_len, 1), 'counts': n,
                'conventions': 'secteur 0 = devant, horaire ; angle absolu = cap + angle relatif ; end ⇔ aucun secteur'},
               open(os.path.join(args.out, 'meta.json'), 'w'), indent=1, ensure_ascii=False)
-    json.dump(g.to_dict(), open(os.path.join(args.out, 'graph.json'), 'w'))
+    json.dump([g.to_dict() for g in graphs], open(os.path.join(args.out, 'graph.json'), 'w'))
     print(f"{i} exemples (train {n['train']}, val {n['val']}) ; {n['end']} fins, {n['multi']} multi-directions ; "
-          f"{n['skipped_open']} états ignorés (amorces en attente) ; graphe {g.total_length():.0f} px, {len(g.edges)} arêtes → {args.out}/")
+          f"{n['skipped_open']} états ignorés (amorces en attente), {n['skipped_blue']} sur trait bleu ; "
+          f"graphe {total_len:.0f} px, {n_edges} arêtes, {len(graphs)} projet(s) → {args.out}/")
 
 
 if __name__ == '__main__':

@@ -49,8 +49,11 @@ def mirror_label(lab, K):
     return lab[..., idx]
 
 
-def save_checkpoint(path, net, meta):
-    torch.save({'arch': ARCH, 'meta': meta, 'model': net.state_dict()}, path)
+def save_checkpoint(path, net, meta, half=False):
+    sd = net.state_dict()
+    if half:                                   # poids en float16 (moitié moins lourd dans le dépôt) ; rechargés en float32
+        sd = {k: v.half() if v.is_floating_point() else v for k, v in sd.items()}
+    torch.save({'arch': ARCH, 'meta': meta, 'model': sd}, path)
 
 
 def load_checkpoint(path, device='cpu'):
@@ -58,7 +61,7 @@ def load_checkpoint(path, device='cpu'):
     if ck.get('arch') != ARCH:
         raise ValueError(f"architecture inattendue : {ck.get('arch')}")
     net = build_net(ck['meta']['sectors'], pretrained=False)
-    net.load_state_dict(ck['model'])
+    net.load_state_dict({k: v.float() if v.is_floating_point() else v for k, v in ck['model'].items()})
     return net.to(device).eval(), ck['meta']
 
 
@@ -82,3 +85,11 @@ class LearnedModel:
         crop, traced = crops
         t = normalize(to_tensor(crop, traced)[None].to(self.device))
         return torch.sigmoid(self.net(t))[0].tolist()
+
+
+if __name__ == '__main__':                     # python3 tools/model.py runs/x/model.pt models/x/model.pt [--half]
+    import sys
+    src, dst = sys.argv[1], sys.argv[2]
+    net, meta = load_checkpoint(src)
+    save_checkpoint(dst, net, meta, half='--half' in sys.argv)
+    print(f'{dst} : {meta["sectors"]} secteurs, fenêtre {meta["window"]}, pas {meta["step"]}, ép. {meta.get("epoch")}')
