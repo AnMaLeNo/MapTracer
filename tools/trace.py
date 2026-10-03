@@ -396,7 +396,7 @@ def main():
     reasons = {}
     for b in tr.branches:
         reasons[b['reason']] = reasons.get(b['reason'], 0) + 1
-    rep.update({'steps': tr.steps, 'branches': len(tr.branches), 'branch_ends': reasons,
+    rep.update({'steps': tr.steps, 'branches': len(tr.branches), 'branch_ends': reasons, 'branch_list': tr.branches,
                 'params': {k: v for k, v in vars(args).items() if k not in ('project', 'image', 'out')}})
     json.dump(rep, open(os.path.join(args.out, 'report.json'), 'w'), indent=1, ensure_ascii=False)
     render(img, ref, out, os.path.join(args.out, 'debug.png'), scale=args.render_scale)
