@@ -287,16 +287,23 @@ def components(ref):
     return comps
 
 
-def compare(ref, out, tol):
+def compare(ref, out, tol, extra_tols=(3.0, 6.0)):
+    """Couverture / précision à `tol` px (et à chaque tolérance de `extra_tols` dans `at_tol`), carrefours retrouvés
+    (à 3×tol) et écart médian entre un carrefour de référence et le carrefour posé le plus proche."""
     Pr, Po = sample_edges(ref), sample_edges(out)
-    cov = float((dist_to_segments(Pr, out) <= tol).mean()) if len(Pr) else 0.0
-    prec = float((dist_to_segments(Po, ref) <= tol).mean()) if len(Po) else 0.0
+    d_ref = dist_to_segments(Pr, out) if len(Pr) else None
+    d_out = dist_to_segments(Po, ref) if len(Po) else None
+    cov = lambda t: float((d_ref <= t).mean()) if d_ref is not None else 0.0
+    prec = lambda t: float((d_out <= t).mean()) if d_out is not None else 0.0
     ref_i = [n for n in ref.nodes if ref.degree(n) >= 3]
     out_i = [n for n in out.nodes if out.degree(n) >= 3]
-    matched = sum(1 for n in ref_i if any(math.dist(ref.xy(n), out.xy(m)) <= 3 * tol for m in out_i))
-    return {'tolerance_px': tol, 'coverage': round(cov, 4), 'precision': round(prec, 4),
+    gaps = sorted(min((math.dist(ref.xy(n), out.xy(m)) for m in out_i), default=math.inf) for n in ref_i)
+    matched = sum(1 for g in gaps if g <= 3 * tol)
+    return {'tolerance_px': tol, 'coverage': round(cov(tol), 4), 'precision': round(prec(tol), 4),
+            'at_tol': {str(t): {'coverage': round(cov(t), 4), 'precision': round(prec(t), 4)} for t in extra_tols},
             'ref_length_px': round(ref.total_length(), 1), 'out_length_px': round(out.total_length(), 1),
-            'ref_intersections': len(ref_i), 'out_intersections': len(out_i), 'intersections_matched': matched}
+            'ref_intersections': len(ref_i), 'out_intersections': len(out_i), 'intersections_matched': matched,
+            'junction_gap_median_px': round(gaps[len(gaps) // 2], 2) if gaps and gaps[len(gaps) // 2] < math.inf else None}
 
 
 def render(img, ref, out, path, margin=40, scale=1):
