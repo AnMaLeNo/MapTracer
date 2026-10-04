@@ -120,7 +120,12 @@ class Graph:
             nxt = [w for w in self.adj[v] if w != u]
             return len(nxt) >= 2 or (len(nxt) == 1 and abs(turn(u, v, nxt[0])) > bend)
 
+        seen_dir = set()               # arêtes orientées déjà parcourues : une boucle (ou des virages serrés en cascade qui
+                                       # remettent `used` à zéro) ne doit pas faire tourner la visée indéfiniment
         def walk(u, v, used):          # au nœud u, on part vers v ; `used` = distance déjà parcourue
+            if (u, v) in seen_dir:
+                return
+            seen_dir.add((u, v))
             d = self.length(u, v)
             if used + d >= L and d > 0:
                 x, y = self.lerp(u, v, (L - used) / d)

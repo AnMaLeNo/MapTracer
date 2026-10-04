@@ -58,8 +58,8 @@
   </section>
 
   <section class="mode-auto">
-    <h2>Zones à corriger <span id="zoneCount" class="pill">0</span></h2>
-    <p class="muted small"><kbd>Maj</kbd>+glisser sur la carte découpe une zone autour d'une erreur ; le tracé du modèle y reste visible et vous annotez par-dessus.</p>
+    <h2>Zones corrigées <span id="zoneCount" class="pill">0</span></h2>
+    <p class="muted small">Cliquez n'importe où sur la carte pour poser un point là où le modèle se trompe ; chaque groupe de points reliés forme une zone (son rectangle est calculé autour des points).</p>
     <ol id="zones" class="list"></ol>
     <div class="btns">
       <button id="btnZoneDelete" disabled>Supprimer la zone active</button>
@@ -122,10 +122,10 @@
     <h2>Mode Auto</h2>
     <ul>
       <li>Choisissez le modèle, puis <b>cliquez</b> un point de départ sur une galerie : le serveur suit le modèle dans toutes les directions et le tracé (rouge) apparaît au fur et à mesure. « Nouveau départ » relance depuis un autre point en gardant le tracé.</li>
-      <li>Repérez une erreur, <kbd>Maj</kbd>+glisser : la zone (jaune) est vierge, le tracé rouge du modèle reste dessous pour voir l'erreur.</li>
-      <li>Annotez comme en mode manuel : clic = premier point, clic = point suivant (relié au précédent), <b>clic droit</b> = carrefour, <kbd>F</kbd> = cul-de-sac, <kbd>Échap</kbd> = finir la branche puis clic sur un point pour repartir de là. Quelques points suffisent (un carrefour + 2–3 points par branche) ; une extrémité non marquée <kbd>F</kbd> est <b>ouverte</b> (anneau pointillé) et jamais apprise comme cul-de-sac.</li>
-      <li>Retouches : glisser un point = déplacer · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier · <kbd>Suppr</kbd> · <kbd>I</kbd> = type · <kbd>Ctrl+Z</kbd>.</li>
-      <li>Annotez <b>toutes</b> les galeries de la zone (une galerie oubliée = une direction fausse apprise), <kbd>Échap</kbd> pour quitter, zone suivante ; exportez quand vous voulez : chaque zone devient un mini-dataset d'exemples difficiles. Le fichier garde aussi la provenance (mode, modèle, version de l'app, départs, tracé complet du modèle) pour qui entraîne.</li>
+      <li>Repérez une erreur et annotez par-dessus le tracé rouge comme en mode manuel, sans rien découper : clic dans le vide = premier point d'un nouveau groupe, clic = point suivant (relié au précédent), <b>clic droit</b> = carrefour, <kbd>F</kbd> = cul-de-sac, <kbd>Échap</kbd> = finir la branche puis clic sur un point pour repartir de là. Chaque groupe de points reliés est une « zone » ; son rectangle (points ± 32 px) sert au rapport et à l'entraînement.</li>
+      <li>Quelques points suffisent (un carrefour + 30–40 px par branche) ; une extrémité non marquée <kbd>F</kbd> est <b>ouverte</b> (anneau pointillé) et jamais apprise comme cul-de-sac — mais un vrai cul-de-sac oublié n'est pas appris non plus : pensez à <kbd>F</kbd>.</li>
+      <li>Retouches : glisser un point = déplacer · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier (deux groupes reliés fusionnent) · <kbd>Suppr</kbd> · <kbd>I</kbd> = type · <kbd>Ctrl+Z</kbd>.</li>
+      <li>Annotez <b>toutes</b> les galeries autour d'un carrefour corrigé (une galerie oubliée = une direction fausse apprise) ; plusieurs départs du modèle et autant de groupes que vous voulez vont dans le même export. Le fichier garde la provenance (mode, modèle, version de l'app, départs, tracé complet du modèle) pour qui entraîne.</li>
     </ul>
   </section>
 

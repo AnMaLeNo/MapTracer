@@ -73,14 +73,17 @@ corrigée devient un mini-dataset d'exemples difficiles pour le prochain entraî
    et l'app affiche le tracé rouge au fur et à mesure (`GET /api/trace/<job>` toutes les 0,7 s). « Arrêter le suivi » garde
    ce qui est tracé ; « Nouveau départ » relance ailleurs **en prolongeant** le tracé existant. Les carrefours posés sont
    cerclés d'orange, les culs-de-sac annoncés par le modèle marqués d'une croix.
-2. Inspecter, puis **Maj+glisser** autour d'une erreur : la zone (jaune) est **vierge** ; le tracé rouge du modèle reste
-   visible dessous (et gardé dans `zone.auto`) pour voir l'erreur pendant qu'on annote.
-3. Annoter la zone **à la main**, comme en mode manuel : clic = premier point, clic = point suivant relié au précédent,
-   clic droit = carrefour, `F` = cul-de-sac, `Échap` = finir la branche puis clic sur un point pour en repartir. Quelques
-   points suffisent (un carrefour + 2–3 points par branche). Toute extrémité non marquée `F` est **ouverte** (anneau
-   pointillé) : ce n'est pas un cul-de-sac, l'oracle ignore les états dont la visée l'atteint. Retouches : glisser = déplacer ·
-   clic sur un segment = insérer · `Ctrl`+clic = relier / délier · `Suppr` · `I` = type · `Ctrl+Z`. Annotez **toutes** les
-   galeries de la zone : une galerie oubliée à un carrefour, c'est une direction fausse enseignée.
+2. Inspecter, puis annoter **à la main là où le modèle se trompe**, sans rien découper : clic dans le vide = premier point
+   d'un nouveau groupe, clic = point suivant relié au précédent, clic droit = carrefour, `F` = cul-de-sac, `Échap` = finir
+   la branche puis clic sur un point pour en repartir. Le tracé rouge du modèle reste visible dessous pour voir l'erreur.
+3. Chaque groupe de points reliés est une **zone** ; son rectangle (`bbox` = points ± 32 px) est calculé automatiquement et
+   sert au rapport, à `trace.py --zone` et au contexte `zone.auto` (ce que le modèle avait tracé là, pris à l'export).
+   Quelques points suffisent (un carrefour + 30–40 px par branche : l'oracle ignore les états dont la visée atteint une
+   extrémité ouverte, une branche de 10 px ne produit rien). Toute extrémité non marquée `F` est **ouverte** (anneau
+   pointillé) : ce n'est pas un cul-de-sac — mais un vrai cul-de-sac oublié n'est pas appris non plus. Retouches : glisser =
+   déplacer · clic sur un segment = insérer · `Ctrl`+clic = relier / délier (deux groupes reliés fusionnent) · `Suppr` ·
+   `I` = type · `Ctrl+Z`. Annotez **toutes** les galeries autour d'un carrefour corrigé : une galerie oubliée, c'est une
+   direction fausse enseignée. Plusieurs départs du modèle et autant de groupes que voulu vont dans le même export.
 4. « Exporter les zones corrigées » → un fichier `*.mapzones.json` (toutes les zones, réimportable) :
 
 ```jsonc
