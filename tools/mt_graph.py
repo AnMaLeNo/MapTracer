@@ -6,7 +6,7 @@ Conventions (identiques dans le jeu de données et dans la boucle de suivi) :
     l'écran) est à l'angle absolu θ + a ;
   - K secteurs : le secteur k est centré sur l'angle relatif k·360/K, k = 0 devant.
 """
-import json, math, random
+import json, math, os, random
 from PIL import Image, ImageDraw
 
 from export_dataset import replay
@@ -120,7 +120,12 @@ class Graph:
             nxt = [w for w in self.adj[v] if w != u]
             return len(nxt) >= 2 or (len(nxt) == 1 and abs(turn(u, v, nxt[0])) > bend)
 
+        seen_dir = set()               # arêtes orientées déjà parcourues : une boucle (ou des virages serrés en cascade qui
+                                       # remettent `used` à zéro) ne doit pas faire tourner la visée indéfiniment
         def walk(u, v, used):          # au nœud u, on part vers v ; `used` = distance déjà parcourue
+            if (u, v) in seen_dir:
+                return
+            seen_dir.add((u, v))
             d = self.length(u, v)
             if used + d >= L and d > 0:
                 x, y = self.lerp(u, v, (L - used) / d)
@@ -265,6 +270,36 @@ def load_project(path):
     proj = json.load(open(path, encoding='utf-8'))
     assert proj.get('format') == 'maptracer/1', 'format inattendu'
     return proj
+
+
+ZONES_FORMAT = 'maptracer-zones/1'
+
+
+def graph_from_zone(z):
+    """Graphe d'une zone corrigée dans l'app (mode Auto) : `nodes` [{id, x, y, kind, open}], `edges` [[a, b]].
+
+    Un nœud `open` (galerie coupée par le bord de la zone, ou suite non vérifiée) n'est pas un cul-de-sac : seul un nœud
+    de degré 1 de type `end` l'est. Tout autre nœud de degré 1 est traité comme ouvert par sécurité."""
+    g = Graph()
+    for n in z['nodes']:
+        g.add_node(n['x'], n['y'], n.get('kind', 'normal'), n['id'])
+    for a, b in z['edges']:
+        g.add_edge(a, b)
+    g.open = {n['id'] for n in z['nodes'] if n.get('open')}
+    g.open |= {n for n in g.nodes if g.degree(n) == 1 and g.nodes[n]['kind'] != 'end'}
+    return g
+
+
+def load_graphs(path):
+    """(document, [(nom, graphe, est_une_zone)]) : un projet maptracer/1 donne un graphe, un fichier de zones
+    maptracer-zones/1 (export du mode Auto) un graphe par zone."""
+    d = json.load(open(path, encoding='utf-8'))
+    base = os.path.basename(path)
+    if d.get('format') == 'maptracer/1':
+        return d, [(base, graph_from_project(d), False)]
+    if d.get('format') == ZONES_FORMAT:
+        return d, [(f'{base}#{i}', graph_from_zone(z), True) for i, z in enumerate(d.get('zones', []))]
+    raise ValueError(f'{path} : format inattendu {d.get("format")!r}')
 
 
 # ---- fenêtre tournée et secteurs ---------------------------------------------------------------------------------

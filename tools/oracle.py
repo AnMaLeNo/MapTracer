@@ -13,6 +13,10 @@ samples_val.jsonl (découpage spatial, pas aléatoire). Plusieurs projets (zones
 donnés ; --holdout est répétable (une zone par projet, par exemple). --skip-blue ignore les états dont l'axe est sur un
 trait bleu (étages inférieurs de Nexus), pour entraîner sur les étages supérieurs seuls.
 
+Les fichiers de zones corrigées du mode Auto de l'app (format maptracer-zones/1, un graphe par zone, bords de zone =
+extrémités ouvertes, jamais des culs-de-sac) se donnent comme des projets ; leurs états reçoivent --zone-aug copies
+perturbées (défaut 6, contre --aug pour les projets) : ce sont les exemples difficiles où le modèle s'est trompé.
+
 Exemple : python3 tools/oracle.py p1.maptracer.json p2.maptracer.json maps/nexus_alkhemia_2011.jpg -o oracle/ --step 2
 """
 import argparse, json, math, os, random, sys
@@ -100,6 +104,7 @@ def main():
                     help='ignorer les états sur un trait bleu (étage inférieur) : part de pixels bleus > RATIO (défaut 0,25)')
     ap.add_argument('--spacing', type=float, help='distance entre positions le long des arêtes (défaut = pas)')
     ap.add_argument('--aug', type=int, default=2, help='copies perturbées par position (en plus de la copie exacte)')
+    ap.add_argument('--zone-aug', type=int, default=6, help='idem pour les zones corrigées du mode Auto (exemples difficiles)')
     ap.add_argument('--offset', type=float, help='décalage latéral max (px, défaut 0,75×pas)')
     ap.add_argument('--heading-noise', type=float, default=25, help='erreur de cap max (°)')
     ap.add_argument('--trace-width', type=int, default=3, help='épaisseur du canal déjà tracé (px)')
@@ -117,12 +122,14 @@ def main():
     rng = random.Random(args.seed)
 
     img = Image.open(args.image).convert('RGB')
-    graphs = []
+    graphs, names, is_zone = [], [], []
     for path in args.projects:
-        proj = G.load_project(path)
-        if proj.get('map') and (img.width, img.height) != (proj['map']['width'], proj['map']['height']):
-            raise SystemExit(f"image {img.size} ≠ carte du projet {path} {proj['map']['width']}×{proj['map']['height']}")
-        graphs.append(G.graph_from_project(proj))
+        doc, items = G.load_graphs(path)
+        m = doc.get('map')
+        if m and (img.width, img.height) != (m['width'], m['height']):
+            raise SystemExit(f"image {img.size} ≠ carte du projet {path} {m['width']}×{m['height']}")
+        for name, g, zone in items:
+            graphs.append(g); names.append(name); is_zone.append(zone)
     holds = [[float(v) for v in h.split(',')] for h in args.holdout]
     in_hold = lambda x, y: any(h[0] <= x <= h[2] and h[1] <= y <= h[3] for h in holds)
     os.makedirs(args.out, exist_ok=True)
@@ -131,12 +138,12 @@ def main():
         os.makedirs(os.path.join(args.out, 'trace'), exist_ok=True)
     f_tr = open(os.path.join(args.out, 'samples.jsonl'), 'w', encoding='utf-8')
     f_va = open(os.path.join(args.out, 'samples_val.jsonl'), 'w', encoding='utf-8') if holds else None
-    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0, 'skipped_open': 0, 'skipped_blue': 0}
+    n = {'train': 0, 'val': 0, 'end': 0, 'multi': 0, 'skipped_open': 0, 'skipped_blue': 0, 'by_input': {nm: 0 for nm in names}}
     i = 0
     states = [(gi, a, b, t) for gi, g in enumerate(graphs) for a, b, t in iter_states(g, args.spacing, rng)]
     for gi, a, b, t in states:
         g = graphs[gi]
-        for k in range(1 + args.aug):
+        for k in range(1 + (args.zone_aug if is_zone[gi] else args.aug)):
             smp = make_sample(g, img, a, b, t, args, rng, perturb=k > 0)
             if smp is None:
                 n['skipped_open'] += 1; continue
@@ -151,20 +158,20 @@ def main():
             ax, ay = row['axis_pos']
             val = in_hold(ax, ay)
             (f_va if val else f_tr).write(json.dumps(row, ensure_ascii=False) + '\n')
-            n['val' if val else 'train'] += 1
+            n['val' if val else 'train'] += 1; n['by_input'][names[gi]] += 1
             n['end'] += row['end']; n['multi'] += len(row['sectors']) > 1
             i += 1
     f_tr.close()
     if f_va:
         f_va.close()
     total_len = sum(g.total_length() for g in graphs); n_edges = sum(len(g.edges) for g in graphs)
-    json.dump({'params': vars(args), 'graph_length_px': round(total_len, 1), 'counts': n,
+    json.dump({'params': vars(args), 'inputs': names, 'zones': int(sum(is_zone)), 'graph_length_px': round(total_len, 1), 'counts': n,
                'conventions': 'secteur 0 = devant, horaire ; angle absolu = cap + angle relatif ; end ⇔ aucun secteur'},
               open(os.path.join(args.out, 'meta.json'), 'w'), indent=1, ensure_ascii=False)
     json.dump([g.to_dict() for g in graphs], open(os.path.join(args.out, 'graph.json'), 'w'))
     print(f"{i} exemples (train {n['train']}, val {n['val']}) ; {n['end']} fins, {n['multi']} multi-directions ; "
           f"{n['skipped_open']} états ignorés (amorces en attente), {n['skipped_blue']} sur trait bleu ; "
-          f"graphe {total_len:.0f} px, {n_edges} arêtes, {len(graphs)} projet(s) → {args.out}/")
+          f"graphe {total_len:.0f} px, {n_edges} arêtes, {len(graphs) - sum(is_zone)} projet(s) + {sum(is_zone)} zone(s) → {args.out}/")
 
 
 if __name__ == '__main__':

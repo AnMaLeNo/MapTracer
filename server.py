@@ -5,14 +5,38 @@
 
 Les modèles sont les sous-dossiers de --models-dir (défaut : models/ s'il existe) contenant un model.pt ; l'app en
 propose la liste et chaque requête /api/predict nomme le modèle voulu (`model`). --model ajoute un fichier isolé.
-Sans aucun modèle, l'app fonctionne en mode manuel seulement (l'API répond 503)."""
-import argparse, http.server, json, os, sys, threading
+Sans aucun modèle, l'app fonctionne en mode manuel seulement (l'API répond 503).
+
+Mode Auto : POST /api/trace {map, model, x, y[, heading, graph, max_steps, thr]} lance en arrière-plan la boucle de suivi
+complète de tools/trace.py depuis ce point (en prolongeant `graph` s'il est donné) et renvoie {job} ; GET /api/trace/<job>
+donne l'avancement et le graphe produit jusque-là ; POST /api/trace/<job>/stop l'interrompt."""
+import argparse, http.server, importlib, importlib.util, json, os, subprocess, sys, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+def git_commit():
+    """Commit courant du dépôt (pour la provenance des exports), None hors dépôt git."""
+    try:
+        return subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=5).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+COMMIT = git_commit()
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
 ARGS = None
-STATE = {'models': {}, 'metas': {}, 'errors': {}, 'images': {}, 'lock': threading.Lock()}
+STATE = {'models': {}, 'metas': {}, 'errors': {}, 'images': {}, 'lock': threading.Lock(), 'jobs': {}, 'job_seq': 0}
+MAX_JOBS = 8
+
+
+def tracer_module():
+    """tools/trace.py (le module stdlib `trace` porte le même nom : on charge explicitement le fichier si besoin)."""
+    T = importlib.import_module('trace')
+    if not hasattr(T, 'Tracer'):
+        spec = importlib.util.spec_from_file_location('mt_trace', os.path.join(ROOT, 'tools', 'trace.py'))
+        T = importlib.util.module_from_spec(spec); spec.loader.exec_module(T)
+    return T
 
 
 def list_models():
@@ -80,6 +104,61 @@ def get_image(rel):
     return STATE['images'][path]
 
 
+def job_view(job):
+    return {k: job[k] for k in ('id', 'status', 'model', 'steps', 'branches', 'queue', 'error', 'seed', 'reasons', 'graph')} | \
+           {'elapsed_s': round((job.get('t_end') or time.time()) - job['t0'], 1)}
+
+
+def start_trace(req):
+    """Lance le suivi complet en arrière-plan ; renvoie le job (dict partagé avec le fil de travail)."""
+    m, err, name = get_model(req.get('model'))
+    if m is None:
+        raise RuntimeError(err)
+    img = get_image(req['map'])
+    x, y = float(req['x']), float(req['y'])
+    heading = req.get('heading')
+    STATE['job_seq'] += 1
+    job = {'id': STATE['job_seq'], 'status': 'running', 'model': name, 'steps': 0, 'branches': 0, 'queue': 0, 'error': None,
+           'seed': [x, y], 'reasons': {}, 'graph': req.get('graph') or {'nodes': [], 'edges': []}, 'stop': False,
+           't0': time.time(), 't_snap': 0.0, 't_end': None}
+    for old in sorted(STATE['jobs'])[:-MAX_JOBS + 1]:
+        if STATE['jobs'][old]['status'] != 'running':
+            del STATE['jobs'][old]
+    STATE['jobs'][job['id']] = job
+    T = tracer_module()
+    import mt_graph as G
+
+    def snapshot(tr):
+        job['graph'] = tr.out.to_dict(); job['steps'] = tr.steps; job['branches'] = len(tr.branches); job['queue'] = len(tr.queue)
+        job['reasons'] = {}
+        for b in tr.branches:
+            job['reasons'][b['reason']] = job['reasons'].get(b['reason'], 0) + 1
+
+    def hook(tr):
+        if job['stop']:
+            raise T.StopTrace()
+        if time.time() - job['t_snap'] > 0.5:
+            snapshot(tr); job['t_snap'] = time.time()
+
+    def work():
+        try:
+            mt = m.meta
+            tr = T.Tracer(m, mt['step'], mt['sectors'], float(req.get('thr', mt.get('thr', 0.5))), img, mt['window'],
+                          trace_width=mt['trace_width'], map_size=img.size, max_steps=int(req.get('max_steps', 20000)), hook=hook)
+            if req.get('graph'):
+                tr.out = G.Graph.from_dict(req['graph'])
+            tr.seed(x, y, None if heading is None else float(heading))
+            tr.run()
+            snapshot(tr)
+            job['status'] = 'stopped' if job['stop'] else ('done' if not tr.queue else 'budget')
+        except Exception as e:
+            job['status'] = 'error'; job['error'] = f'{type(e).__name__}: {e}'
+        job['t_end'] = time.time()
+
+    threading.Thread(target=work, daemon=True).start()
+    return job
+
+
 class H(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=ROOT, **k)
@@ -100,7 +179,11 @@ class H(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.split('?')[0] == '/api/model':
+        path = self.path.split('?')[0]
+        if path.startswith('/api/trace/'):
+            job = STATE['jobs'].get(int(path.split('/')[3]) if path.split('/')[3].isdigit() else None)
+            return self.reply(200, job_view(job)) if job else self.reply(404, {'error': 'suivi inconnu (serveur redémarré ?)'})
+        if path == '/api/model':
             lst = []
             for name, pt in list_models().items():
                 meta = get_meta(name, pt)
@@ -111,15 +194,27 @@ class H(http.server.SimpleHTTPRequestHandler):
             if ok:
                 m, _, _ = get_model(ok[0]['name'])
                 device = str(m.device) if m else None
-            return self.reply(200 if ok else 503, {'available': bool(ok), 'models': lst, 'device': device,
+            return self.reply(200 if ok else 503, {'available': bool(ok), 'models': lst, 'device': device, 'commit': COMMIT,
                                                    'error': None if ok else (lst[0]['error'] if lst else NO_MODEL)})
         return super().do_GET()
 
     def do_POST(self):
-        if self.path.split('?')[0] != '/api/predict':
-            return self.reply(404, {'error': 'inconnu'})
+        path = self.path.split('?')[0]
         try:
-            req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+            req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
+            if path == '/api/trace':
+                try:
+                    return self.reply(200, job_view(start_trace(req)))
+                except RuntimeError as e:
+                    return self.reply(503, {'error': str(e)})
+            if path.startswith('/api/trace/') and path.endswith('/stop'):
+                job = STATE['jobs'].get(int(path.split('/')[3]))
+                if not job:
+                    return self.reply(404, {'error': 'suivi inconnu'})
+                job['stop'] = True
+                return self.reply(200, {'ok': True})
+            if path != '/api/predict':
+                return self.reply(404, {'error': 'inconnu'})
             m, err, name = get_model(req.get('model'))
             if m is None:
                 return self.reply(503, {'error': err})

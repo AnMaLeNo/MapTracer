@@ -113,6 +113,7 @@ def main():
     ap.add_argument('--tol-deg', type=float, default=17.0, help='tolérance d’appariement des directions (1,5 secteur)')
     ap.add_argument('--device', help='cuda / cpu (défaut : cuda si dispo)')
     ap.add_argument('--no-pretrained', action='store_true')
+    ap.add_argument('--init', help='model.pt dont repartir (affinage : poids chargés à la place de ceux d’ImageNet)')
     ap.add_argument('--no-aug', action='store_true')
     ap.add_argument('--limit', type=int, help='n’utiliser que les N premiers exemples (test rapide)')
     ap.add_argument('--seed', type=int, default=0)
@@ -130,7 +131,14 @@ def main():
     print(f"{len(rows_tr)} train, {len(rows_va)} val, fenêtre {W}, {K} secteurs, chargés en {time.time() - t0:.0f}s ; "
           f"appareil {dev}", flush=True)
 
-    net = M.build_net(K, pretrained=not a.no_pretrained).to(dev)
+    net = M.build_net(K, pretrained=not a.no_pretrained and not a.init)
+    if a.init:
+        ck = torch.load(a.init, map_location='cpu', weights_only=False)
+        if ck['meta']['sectors'] != K or ck['meta']['window'] != W:
+            raise SystemExit(f"--init : {a.init} a {ck['meta']['sectors']} secteurs / fenêtre {ck['meta']['window']}, le dataset {K} / {W}")
+        net.load_state_dict({k: v.float() if v.is_floating_point() else v for k, v in ck['model'].items()})
+        print(f"poids initiaux : {a.init} (époque {ck['meta'].get('epoch')})", flush=True)
+    net = net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.wd)
     steps = a.epochs * math.ceil(len(Xtr) / a.bs)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=steps, pct_start=0.15)

@@ -10,7 +10,7 @@ points déjà posés, et doit décider du **prochain point**. Chaque clic humain
 ## Lancer l'application
 
 ```bash
-python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté avec les modèles de models/
+python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté + Auto avec les modèles de models/
 python3 server.py 8080 --model runs/x/model.pt      # ajoute un model.pt isolé à la liste ; --device cuda|cpu
 ```
 
@@ -61,6 +61,65 @@ comme du reste, et les compteurs « propositions suivies / corrigées » mesuren
 La « portée » ne change **pas** le pas du modèle : le serveur avance toujours du pas d'entraînement lu dans le `.pt`
 (`meta.step`, 2 px pour le modèle v3) et enchaîne autant de petits pas que la portée le permet ; elle ne fixe que la longueur
 de la proposition affichée. Un modèle entraîné à 2 px s'utilise donc à 2 px — c'est automatique.
+
+## Mode Auto : le modèle trace tout, l'humain corrige par zones (`app/auto.js`, `/api/trace`)
+
+Bouton « Auto : le modèle trace, je corrige » en haut du panneau. Principe (*hard-example mining*) : plutôt que de réannoter
+ce que le modèle sait déjà faire, on le laisse tracer, on repère **où** il se trompe et on ne corrige que là ; chaque zone
+corrigée devient un mini-dataset d'exemples difficiles pour le prochain entraînement.
+
+1. Choisir la carte (liste) et le modèle, puis **cliquer un point de départ** sur une galerie : le serveur lance la boucle
+   complète de `tools/trace.py` en arrière-plan (`POST /api/trace`, budget « pas max », 20 000 par défaut ≈ 2 min sur CPU)
+   et l'app affiche le tracé rouge au fur et à mesure (`GET /api/trace/<job>` toutes les 0,7 s). « Arrêter le suivi » garde
+   ce qui est tracé ; « Nouveau départ » relance ailleurs **en prolongeant** le tracé existant. Les carrefours posés sont
+   cerclés d'orange, les culs-de-sac annoncés par le modèle marqués d'une croix.
+2. Inspecter, puis annoter **à la main là où le modèle se trompe**, sans rien découper : clic dans le vide = premier point
+   d'un nouveau groupe, clic = point suivant relié au précédent, clic droit = carrefour, `F` = cul-de-sac, `Échap` = finir
+   la branche puis clic sur un point pour en repartir. Le tracé rouge du modèle reste visible dessous pour voir l'erreur.
+3. Chaque groupe de points reliés est une **zone** ; son rectangle (`bbox` = points ± 32 px) est calculé automatiquement et
+   sert au rapport, à `trace.py --zone` et au contexte `zone.auto` (ce que le modèle avait tracé là, pris à l'export).
+   Quelques points suffisent (un carrefour + 30–40 px par branche : l'oracle ignore les états dont la visée atteint une
+   extrémité ouverte, une branche de 10 px ne produit rien). Toute extrémité non marquée `F` est **ouverte** (anneau
+   pointillé) : ce n'est pas un cul-de-sac — mais un vrai cul-de-sac oublié n'est pas appris non plus. Retouches : glisser =
+   déplacer · clic sur un segment = insérer · `Ctrl`+clic = relier / délier (deux groupes reliés fusionnent) · `Suppr` ·
+   `I` = type · `Ctrl+Z`. Annotez **toutes** les galeries autour d'un carrefour corrigé : une galerie oubliée, c'est une
+   direction fausse enseignée. Plusieurs départs du modèle et autant de groupes que voulu vont dans le même export.
+4. « Exporter les zones corrigées » → un fichier `*.mapzones.json` (toutes les zones, réimportable) :
+
+```jsonc
+{ "format": "maptracer-zones/1", "map": { "id": "nexus_alkhemia_2011", ... }, "seeds": [[4940, 3261]],
+  "provenance": { "mode": "auto", "model": "v4-w128-k32", "budget": 20000,       // pour qui entraîne : d'où viennent ces zones
+                  "app": { "commit": "379a0f3", "url": "http://…/app/", "userAgent": "…" }, "server": { "device": "cuda", "commit": "379a0f3" },
+                  "job": { "status": "budget", "steps": 20000, "branches": 312, "reasons": { "end": 120, ... } }, "zones_models": ["v4-w128-k32"] },
+  "trace": { "nodes": [...], "edges": [...] },                                       // tout le tracé du modèle sur la carte
+  "zones": [ { "id": 1, "bbox": [x0, y0, x1, y1], "model": "v4-w128-k32", "edits": 12,
+               "nodes": [ { "id": 1, "x": 4931.5, "y": 3250, "kind": "normal|intersection|end", "open": false }, ... ],
+               "edges": [[1, 2], ...],
+               "auto": { "nodes": [...], "edges": [...] } } ] }      // le tracé du modèle avant correction, pour mémoire
+```
+
+Un nœud de degré 1 est un cul-de-sac **seulement** s'il est de type `end` ; tout autre nœud de degré 1 (`open`) est une
+extrémité ouverte. Ces fichiers se donnent à l'oracle **avec** les gros projets ; leurs états reçoivent `--zone-aug` copies
+perturbées (6 par défaut, contre `--aug` 2 pour les projets), ce qui les pèse ~2,3× plus :
+
+```bash
+python3 tools/oracle.py data/nexus_alkhemia_2011.maptracer.json data/nexus_alkhemia_2011-0202.maptracer.json \
+        zones/*.mapzones.json maps/nexus_alkhemia_2011.jpg -o oracle_v5/ --window 128 --step 2 --lookahead 6 --near 6 \
+        --holdout 4200,3200,5800,3600 --holdout 3000,2500,4100,2900
+python3 tools/train.py oracle_v5/ -o runs/v5 --epochs 30
+```
+
+`meta.json` liste les entrées (`inputs`) et le nombre d'exemples par entrée (`counts.by_input`). Une zone qui tombe dans une
+zone de validation `--holdout` alimente la validation, pas l'entraînement.
+
+Pour comprendre ce que les zones corrigent avant d'entraîner : `python3 tools/zones_report.py zones.mapzones.json
+maps/nexus_alkhemia_2011.jpg -o rapport/` compare, zone par zone, le tracé du modèle (`zone.auto`) à l'annotation (longueurs,
+carrefours retrouvés, couverture de l'annotation par le modèle, culs-de-sac, extrémités ouvertes) et dessine chaque zone
+(`zone_<id>.png`, rouge = modèle, bleu = humain). Un fichier de zones sert aussi de **référence** à `trace.py` (`--zone i`
+pour la i-ème zone, bbox = celui de la zone ± `--zone-margin`) : on rejoue le modèle sur la zone corrigée et on mesure s'il
+la suit maintenant. Attention : les zones ayant servi à l'entraînement, ce chiffre mesure l'apprentissage de l'exemple,
+pas la généralisation — celle-ci se lit sur les deux holdouts. Le mode Auto ne rend pas le modèle autonome :
+c'est l'outil qui mesure ses erreurs et les transforme en données.
 
 ## Format des données
 
@@ -180,6 +239,7 @@ Dépendances : `pip install torch torchvision` (le reste de l'outil n'en a pas b
 
 ```bash
 python3 tools/train.py oracle/ -o runs/v1 --epochs 15 --bs 64 --lr 3e-4          # → runs/v1/model.pt, history.json
+python3 tools/train.py oracle_v5/ -o runs/v5_ft --epochs 10 --lr 1e-4 --init models/v4-w128-k32/model.pt   # affinage
 python3 tools/trace.py projet.maptracer.json maps/nexus_alkhemia_2011.jpg -o trace_v1/ \
         --model runs/v1/model.pt --bbox x0,y0,x1,y1                                # suivi réel sur la zone de validation
 ```
@@ -220,5 +280,6 @@ validation (une par projet) : fenêtres 96 / 128 / 192, 32 / 64 secteurs, avec /
 inférieurs), deux graines. Résumé : ce sont les **données** qui améliorent le suivi (zone 0202 : couverture au premier
 départ 69 → 97 %, carrefours 12 → 15/20 posés à 3 px), pas les hyperparamètres ; le bruit de graine en suivi réel est du
 même ordre que les écarts entre variantes ; retirer les états bleus n'apporte rien. Les poids (float16) et une note par
-modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`.
+modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`. Les `v5-*` ont appris les six zones corrigées du mode Auto
+(`data/zones/`) : `v5-z6-g1` est celui à utiliser pour chercher de nouvelles erreurs (voir `models/COMPARAISON.md`).
 

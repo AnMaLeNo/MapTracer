@@ -21,14 +21,22 @@
   </section>
 
   <section>
+    <h2>Mode</h2>
+    <div class="seg" id="modeSeg">
+      <button data-mode="trace" class="active">Tracer (manuel / assisté)</button>
+      <button data-mode="auto">Auto : le modèle trace, je corrige</button>
+    </div>
+    <label class="row">Modèle <select id="modelSelect"><option value="">(aucun)</option></select></label>
+    <div id="assistInfo" class="muted small"></div>
+  </section>
+
+  <section class="mode-trace">
     <h2>Paramètres</h2>
     <label class="row">Fenêtre (px carte) <input type="number" id="winSize" min="32" max="4096" step="16" value="256"></label>
     <label class="row"><input type="checkbox" id="allowOutside"> Autoriser un point hors fenêtre</label>
     <label class="row"><input type="checkbox" id="showOrder" checked> Numéroter les points</label>
     <label class="row"><input type="checkbox" id="assist"> Mode assisté (le modèle propose) <kbd>A</kbd></label>
-    <label class="row">Modèle <select id="modelSelect"><option value="">(aucun)</option></select></label>
     <label class="row">Portée des propositions (px) <input type="number" id="proposeDist" min="4" max="512" step="2" value="32"></label>
-    <div id="assistInfo" class="muted small"></div>
     <label class="row">Projet <input type="text" id="projName" placeholder="nom du projet"></label>
   </section>
 
@@ -38,7 +46,39 @@
     <div id="stats" class="stats"></div>
   </section>
 
-  <section>
+  <section class="mode-auto">
+    <h2>Tracé automatique</h2>
+    <label class="row">Budget (pas max) <input type="number" id="autoBudget" min="100" max="500000" step="1000" value="20000"></label>
+    <div class="btns">
+      <button id="btnAutoSeed" title="Puis cliquez sur la carte">Nouveau départ : cliquer sur la carte</button>
+      <button id="btnAutoStop" disabled>Arrêter le suivi</button>
+      <button id="btnAutoClear" class="danger">Effacer le tracé et les zones</button>
+    </div>
+    <div id="autoInfo" class="muted small"></div>
+  </section>
+
+  <section class="mode-auto">
+    <h2>Zones corrigées <span id="zoneCount" class="pill">0</span></h2>
+    <p class="muted small">Cliquez n'importe où sur la carte pour poser un point là où le modèle se trompe ; chaque groupe de points reliés forme une zone (son rectangle est calculé autour des points).</p>
+    <ol id="zones" class="list"></ol>
+    <div class="btns">
+      <button id="btnZoneDelete" disabled>Supprimer la zone active</button>
+      <button id="btnZoneUndo" title="Ctrl+Z" disabled>Annuler la dernière modification <kbd>Ctrl+Z</kbd></button>
+      <button id="btnZoneDone" disabled title="Échap">Quitter la zone <kbd>Échap</kbd></button>
+    </div>
+    <div id="zoneInfo" class="muted small"></div>
+  </section>
+
+  <section class="mode-auto">
+    <h2>Mini-datasets</h2>
+    <div class="btns">
+      <button id="btnZonesExport">Exporter les zones corrigées (JSON)</button>
+      <label class="file btn">Importer des zones… <input type="file" id="zonesImport" accept="application/json"></label>
+    </div>
+    <p class="muted small">Un fichier <code>.mapzones.json</code> avec toutes les zones ; il se donne à <code>tools/oracle.py</code> avec les gros projets pour réentraîner.</p>
+  </section>
+
+  <section class="mode-trace">
     <h2>Actions</h2>
     <div class="btns">
       <button id="btnKind" title="I ou Maj+clic / clic droit">Prochain point : <b>normal</b></button>
@@ -52,23 +92,23 @@
     </div>
   </section>
 
-  <section>
+  <section class="mode-trace">
     <h2>Fenêtre vue par le modèle</h2>
     <canvas id="crop" width="220" height="220"></canvas>
     <div class="muted small" id="cropInfo"></div>
   </section>
 
-  <section>
+  <section class="mode-trace">
     <h2>Branches en attente <span id="queueCount" class="pill">0</span></h2>
     <ol id="queue" class="list"></ol>
   </section>
 
-  <section>
+  <section class="mode-trace">
     <h2>Journal</h2>
     <ol id="log" class="list log"></ol>
   </section>
 
-  <section>
+  <section class="mode-trace">
     <h2>Données</h2>
     <div class="btns">
       <button id="btnExport">Exporter le projet (JSON)</button>
@@ -78,7 +118,18 @@
     <p class="muted small">Sauvegarde automatique dans le navigateur. Les crops d'entraînement se génèrent avec <code>tools/export_dataset.py</code> à partir du JSON.</p>
   </section>
 
-  <section class="help">
+  <section class="help mode-auto">
+    <h2>Mode Auto</h2>
+    <ul>
+      <li>Choisissez le modèle, puis <b>cliquez</b> un point de départ sur une galerie : le serveur suit le modèle dans toutes les directions et le tracé (rouge) apparaît au fur et à mesure. « Nouveau départ » relance depuis un autre point en gardant le tracé.</li>
+      <li>Repérez une erreur et annotez par-dessus le tracé rouge comme en mode manuel, sans rien découper : clic dans le vide = premier point d'un nouveau groupe, clic = point suivant (relié au précédent), <b>clic droit</b> = carrefour, <kbd>F</kbd> = cul-de-sac, <kbd>Échap</kbd> = finir la branche puis clic sur un point pour repartir de là. Chaque groupe de points reliés est une « zone » ; son rectangle (points ± 32 px) sert au rapport et à l'entraînement.</li>
+      <li>Quelques points suffisent (un carrefour + 30–40 px par branche) ; une extrémité non marquée <kbd>F</kbd> est <b>ouverte</b> (anneau pointillé) et jamais apprise comme cul-de-sac — mais un vrai cul-de-sac oublié n'est pas appris non plus : pensez à <kbd>F</kbd>.</li>
+      <li>Retouches : glisser un point = déplacer · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier (deux groupes reliés fusionnent) · <kbd>Suppr</kbd> · <kbd>I</kbd> = type · <kbd>Ctrl+Z</kbd>.</li>
+      <li>Annotez <b>toutes</b> les galeries autour d'un carrefour corrigé (une galerie oubliée = une direction fausse apprise) ; plusieurs départs du modèle et autant de groupes que vous voulez vont dans le même export. Le fichier garde la provenance (mode, modèle, version de l'app, départs, tracé complet du modèle) pour qui entraîne.</li>
+    </ul>
+  </section>
+
+  <section class="help mode-trace">
     <h2>Règles</h2>
     <ul>
       <li>Clic : pose un point sur l’<b>axe</b> de la galerie, le plus loin possible sans traverser de mur (la fenêtre n’est qu’un repère : le modèle final avance à pas fixe).</li>
@@ -97,5 +148,6 @@
   <div id="drop">Déposez une image de carte ici</div>
 </main>
 <script src="app.js"></script>
+<script src="auto.js"></script>
 </body>
 </html>
