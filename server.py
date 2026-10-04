@@ -9,7 +9,11 @@ Sans aucun modèle, l'app fonctionne en mode manuel seulement (l'API répond 503
 
 Mode Auto : POST /api/trace {map, model, x, y[, heading, graph, max_steps, thr]} lance en arrière-plan la boucle de suivi
 complète de tools/trace.py depuis ce point (en prolongeant `graph` s'il est donné) et renvoie {job} ; GET /api/trace/<job>
-donne l'avancement et le graphe produit jusque-là ; POST /api/trace/<job>/stop l'interrompt."""
+donne l'avancement et le graphe produit jusque-là ; POST /api/trace/<job>/stop l'interrompt.
+
+Audit des annotations : POST /api/audit {map, model, graphs: [{name, nodes: [{id, x, y, kind, open}], edges: [[a, b]]}][, thr]}
+rejoue le modèle sur chaque point annoté (tools/audit.py) en arrière-plan et renvoie {job} ; GET /api/audit/<job> donne
+l'avancement puis {anomalies, stats} ; POST /api/audit/<job>/stop l'interrompt."""
 import argparse, http.server, importlib, importlib.util, json, os, subprocess, sys, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -159,6 +163,56 @@ def start_trace(req):
     return job
 
 
+def audit_view(job):
+    return {k: job[k] for k in ('id', 'status', 'model', 'done', 'total', 'error', 'anomalies', 'stats', 'thr')} | \
+           {'elapsed_s': round((job.get('t_end') or time.time()) - job['t0'], 1)}
+
+
+def start_audit(req):
+    """Audit en arrière-plan des graphes annotés envoyés par l'app (projet courant ou zones du mode Auto)."""
+    m, err, name = get_model(req.get('model'))
+    if m is None:
+        raise RuntimeError(err)
+    img = get_image(req['map'])
+    graphs = req.get('graphs') or []
+    if not any(gd.get('edges') for gd in graphs):
+        raise RuntimeError('rien à vérifier : aucun segment annoté')
+    thr = float(req.get('thr', m.meta.get('thr', 0.5)))
+    STATE['job_seq'] += 1
+    job = {'id': STATE['job_seq'], 'status': 'running', 'model': name, 'done': 0, 'total': 0, 'error': None, 'anomalies': [],
+           'stats': {}, 'thr': thr, 'stop': False, 't0': time.time(), 't_end': None}
+    STATE['jobs'][job['id']] = job
+    import mt_graph as G
+    import audit as AU
+
+    def work():
+        try:
+            base = 0
+            for gd in graphs:
+                if not gd.get('edges'):
+                    continue
+                g = G.graph_from_zone(gd)
+                off = base
+
+                def hook(done, total):
+                    if job['stop']:
+                        raise InterruptedError()
+                    job['done'], job['total'] = off + done, max(job['total'], off + total)
+                an, st = AU.audit_graph(g, img, m, thr=thr, hook=hook, source=gd.get('name', ''))
+                job['anomalies'] += an; job['stats'][gd.get('name', '')] = st
+                base = job['done']
+            job['anomalies'].sort(key=lambda r: -r['score'])
+            job['status'] = 'done'
+        except InterruptedError:
+            job['status'] = 'stopped'
+        except Exception as e:
+            job['status'] = 'error'; job['error'] = f'{type(e).__name__}: {e}'
+        job['t_end'] = time.time()
+
+    threading.Thread(target=work, daemon=True).start()
+    return job
+
+
 class H(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=ROOT, **k)
@@ -180,9 +234,11 @@ class H(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?')[0]
-        if path.startswith('/api/trace/'):
+        if path.startswith('/api/trace/') or path.startswith('/api/audit/'):
             job = STATE['jobs'].get(int(path.split('/')[3]) if path.split('/')[3].isdigit() else None)
-            return self.reply(200, job_view(job)) if job else self.reply(404, {'error': 'suivi inconnu (serveur redémarré ?)'})
+            if not job:
+                return self.reply(404, {'error': 'tâche inconnue (serveur redémarré ?)'})
+            return self.reply(200, audit_view(job) if 'anomalies' in job else job_view(job))
         if path == '/api/model':
             lst = []
             for name, pt in list_models().items():
@@ -207,10 +263,15 @@ class H(http.server.SimpleHTTPRequestHandler):
                     return self.reply(200, job_view(start_trace(req)))
                 except RuntimeError as e:
                     return self.reply(503, {'error': str(e)})
-            if path.startswith('/api/trace/') and path.endswith('/stop'):
+            if path == '/api/audit':
+                try:
+                    return self.reply(200, audit_view(start_audit(req)))
+                except RuntimeError as e:
+                    return self.reply(503, {'error': str(e)})
+            if (path.startswith('/api/trace/') or path.startswith('/api/audit/')) and path.endswith('/stop'):
                 job = STATE['jobs'].get(int(path.split('/')[3]))
                 if not job:
-                    return self.reply(404, {'error': 'suivi inconnu'})
+                    return self.reply(404, {'error': 'tâche inconnue'})
                 job['stop'] = True
                 return self.reply(200, {'ok': True})
             if path != '/api/predict':

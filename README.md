@@ -121,6 +121,54 @@ la suit maintenant. Attention : les zones ayant servi à l'entraînement, ce chi
 pas la généralisation — celle-ci se lit sur les deux holdouts. Le mode Auto ne rend pas le modèle autonome :
 c'est l'outil qui mesure ses erreurs et les transforme en données.
 
+## Détecteur d'anomalies d'annotation (`tools/audit.py`, `/api/audit`, onglet « Anomalies »)
+
+Un modèle déjà entraîné rejoue chaque point annoté — projet du mode Tracer ou zones du mode Auto — et ses désaccords
+remontent dans une liste à valider. Pour chaque état « sur l'axe » (positions régulières le long de chaque arête, dans les
+deux sens, canal « déjà tracé » = chemin d'arrivée, sans tirage aléatoire) on compare les directions du modèle à celles de
+l'oracle :
+
+| type | sens | cause probable |
+|---|---|---|
+| `end_missed` | extrémité **sans F** où le modèle ne voit aucune suite | cul-de-sac oublié (`F`) |
+| `false_end` | cul-de-sac (`F`) où le modèle voit la galerie continuer | `F` posé trop tôt, ou galerie réelle à vérifier |
+| `branch_missed` | direction vue par le modèle que rien n'annote | branche oubliée, ou faux positif du modèle |
+| `direction_missed` | galerie annotée que le modèle ne voit pas du tout | point hors axe, trait d'un autre étage, ou vrai manque d'apprentissage |
+
+Le score est la confiance du modèle dans le désaccord ; les anomalies de même type à moins de 8 px sont regroupées (`×n`).
+`direction_missed` est la classe la plus bruyante (près de carrefours serrés, la visée traverse deux nœuds et vise des
+branches que le modèle n'a pas à voir) : on ne la garde que confirmée par deux états. **Le modèle n'est pas la vérité** :
+dans l'app, « OK » signifie « l'annotation est juste, l'exemple lui manque » (et c'est tant mieux, c'est la donnée qu'il
+lui faut), « À corriger » marque ce que vous reprendrez ; rien n'est modifié automatiquement, et les décisions restent dans
+le navigateur. En ligne de commande :
+
+```bash
+python3 tools/audit.py data/projects/nexus_alkhemia_2011-0202.maptracer.json maps/nexus_alkhemia_2011.jpg \
+        --model models/v5-z6-g1/model.pt -o audit.json          # 4 700 états, ~1 min sur CPU, ~5 s sur GPU
+```
+
+Premier passage de `v5-z6-g1` sur `-0202` (4 734 états) : 67 anomalies — 2 `end_missed`, 8 `false_end`, 49 `branch_missed`,
+8 `direction_missed` ; vérifiées à l'œil sur six d'entre elles : deux `F` posés devant une galerie qui continue nettement,
+une branche latérale oubliée, un `branch_missed` sur un trait bleu (étage inférieur : faux positif attendu). Sur les
+7 zones du second lot (jamais vues du modèle) : 2 `end_missed` (dont une extrémité sans `F` au fond d'un cul-de-sac dessiné),
+5 `false_end`, 10 `branch_missed`, 41 `direction_missed` avant filtrage — ce dernier chiffre dit surtout que les zones
+denses du lot (zone 1 : 26 carrefours sur 178 px) sont loin de ce qu'il connaît.
+
+## Données d'entraînement dans le dépôt (`data/`)
+
+Tout ce qu'il faut pour réentraîner est versionné : `data/projects/` (les deux gros projets du mode Tracer,
+`nexus_alkhemia_2011` 1 138 points et `nexus_alkhemia_2011-0202` 1 839 points — `-02` n'est qu'un état intermédiaire du
+second, gardé pour mémoire, **ne pas l'ajouter** à l'entraînement), `data/zones/` (les lots de zones corrigées du mode Auto,
+avec provenance et tracé complet du modèle), `maps/` (la carte), `models/` (les poids). Réentraîner la recette de référence :
+
+```bash
+python3 tools/oracle.py data/projects/nexus_alkhemia_2011.maptracer.json data/projects/nexus_alkhemia_2011-0202.maptracer.json \
+        data/zones/*.mapzones.json maps/nexus_alkhemia_2011.jpg -o dataset/v6 \
+        --window 128 --step 2 --lookahead 6 --near 6 --sectors 32 --aug 2 --zone-aug 6 \
+        --holdout 4200,3200,5800,3600 --holdout 3000,2500,4100,2900
+python3 tools/train.py dataset/v6 -o runs/v6 --epochs 30 --device cuda          # ou --init models/v5-z6-g1/model.pt --epochs 10
+```
+
 ## Format des données
 
 ### Projet (`*.maptracer.json`)

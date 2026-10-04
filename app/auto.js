@@ -427,6 +427,7 @@ const Auto = {
     }
     // départs
     for (const [x, y] of auto.seeds) { const [sx, sy] = toScreen(x, y); if (!vis(sx, sy)) continue; ctx.strokeStyle = '#39c47c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.moveTo(sx - 13, sy); ctx.lineTo(sx + 13, sy); ctx.moveTo(sx, sy - 13); ctx.lineTo(sx, sy + 13); ctx.stroke(); }
+    Audit.draw();
   },
   ui() {
     if (typeof mode !== 'undefined' && mode !== 'auto') { $('hud').textContent = ''; return; }

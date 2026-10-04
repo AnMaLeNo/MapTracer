@@ -48,3 +48,13 @@ kbd{float:right;background:#0f1216;border:1px solid var(--line);border-radius:4p
 body[data-mode=auto] .mode-trace{display:none} body[data-mode=trace] .mode-auto{display:none}
 .list li.active{color:var(--acc)}
 #main.arm #view{cursor:cell}
+
+/* anomalies */
+.list.audit{max-height:260px}
+.list.audit li{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.list.audit li.st-ok{opacity:.5}
+.list.audit li.st-fix{color:#ff7a1a}
+.list.audit .dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none}
+.list.audit .acts{margin-left:auto;display:flex;gap:3px}
+.list.audit .acts button{font-size:10px;padding:1px 6px}
+button.small{font-size:11px;padding:3px 8px}

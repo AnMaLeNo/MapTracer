@@ -374,6 +374,7 @@ function draw() {
     ctx.strokeStyle = '#ff4d4d'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y, r * 2.6, 0, 7); ctx.stroke();
     ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x - r * 4, y); ctx.lineTo(x + r * 4, y); ctx.moveTo(x, y - r * 4); ctx.lineTo(x, y + r * 4); ctx.stroke();
   }
+  Audit.draw();
   drawCrop();
 }
 function drawCrop() {
@@ -494,7 +495,7 @@ function setMode(m) {
   mode = m; localStorage.setItem('mt-mode', m); document.body.dataset.mode = m;
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
   $('main').classList.remove('arm');
-  refresh(false);
+  refresh(false); Audit.ui();
 }
 document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 function updateUI() {
@@ -665,7 +666,7 @@ main.addEventListener('drop', e => { e.preventDefault(); main.classList.remove('
   }
   syncSettingsUI();
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-  await Auto.init();
+  await Auto.init(); await Audit.load();
   if (project.map) {
     const entry = mapIndex.find(m => m.id === project.map.id);
     const blob = entry ? null : await idb.get('mapBlob');

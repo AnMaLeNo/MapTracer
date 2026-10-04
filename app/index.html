@@ -30,6 +30,20 @@
     <div id="assistInfo" class="muted small"></div>
   </section>
 
+  <section>
+    <h2>Anomalies <span id="auditCount" class="pill">0</span></h2>
+    <div class="btns">
+      <button id="btnAudit" title="Le modèle choisi rejoue chaque point annoté et liste ses désaccords">Vérifier mes annotations avec le modèle</button>
+      <button id="btnAuditStop" disabled>Arrêter la vérification</button>
+    </div>
+    <label class="row">Afficher <select id="auditFilter"></select></label>
+    <label class="row"><input type="checkbox" id="auditHide"> Masquer les anomalies traitées</label>
+    <ol id="auditList" class="list audit"></ol>
+    <div id="auditInfo" class="muted small"></div>
+    <div class="btns"><button id="btnAuditClear" class="danger small">Effacer la liste</button></div>
+    <p class="muted small">Vérifie le projet (mode Tracer) ou les zones (mode Auto). Le modèle n'est pas la vérité : <b>OK</b> = l'annotation est juste (et l'exemple lui manque), <b>À corriger</b> = à reprendre. Un clic centre la carte sur l'anomalie ; le trait indique la direction que le modèle voit.</p>
+  </section>
+
   <section class="mode-trace">
     <h2>Paramètres</h2>
     <label class="row">Fenêtre (px carte) <input type="number" id="winSize" min="32" max="4096" step="16" value="256"></label>
@@ -149,5 +163,6 @@
 </main>
 <script src="app.js"></script>
 <script src="auto.js"></script>
+<script src="audit.js"></script>
 </body>
 </html>
