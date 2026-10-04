@@ -112,3 +112,85 @@ v2 n'est pas livré : il coupe les virages, voir `v3-pas2/NOTES.md`.)
 Par défaut dans l'app : **`v4-w128-k32`**. Si tu annotes une zone dense où il s'arrête trop tôt, essaie `v4-w128-k32-g1`
 ou `v4-w192-k32`. Tous restent des **outils de proposition à valider** : aucun n'a été évalué en autonomie sur une zone
 de plus de 1 600 × 400 px, et la précision réelle hors des zones bien annotées est inconnue.
+
+---
+
+# Campagne v5 (octobre 2026) : exemples difficiles du mode Auto
+
+Même recette que `v4-w128-k32` (fenêtre 128, 32 secteurs, pas 2 / visée 6, 30 époques), avec en plus les **six zones
+corrigées** de `data/zones/nexus_alkhemia_2011_sud_v4-w128-k32_2026-10-04.mapzones.json` : tracé Auto de
+`v4-w128-k32` depuis (4262, 5426), six zones (≈ 950 px de galeries, 18 carrefours, sud de la carte) réannotées à la main
+là où il se trompait. Les zones sont répétées `--zone-aug` fois dans le dataset (les projets : 1 fois). Validation
+inchangée (mêmes holdouts, 9 603 exemples). Provenance et tracé complet du modèle dans le fichier ; comparaison zone par
+zone avec `tools/zones_report.py`.
+
+| modèle | données | particularité | livré |
+|---|---|---|---|
+| `v5-z6` | 01 + 0202 + 6 zones ×6 | 61 739 ex. (zones ≈ 11 % du train) | oui |
+| `v5-z6-g1` | idem | graine 1 | oui |
+| v5-z20 | 01 + 0202 + 6 zones ×20 | 72 981 ex. | non |
+| v5-ft | 01 + 0202 + 6 zones ×6 | affinage de `v4-w128-k32` (`--init`, 10 ép., lr 1e-4, 5 min) | non |
+
+## Exemples isolés (validation)
+
+| modèle | P dir. | R dir. | F1 | cul-de-sac | rappel carrefours | erreur angulaire |
+|---|---|---|---|---|---|---|
+| v4-w128-k32 (rappel) | 0,972 | 0,952 | 0,962 | 0,756 | 0,776 | 3,41° |
+| v5-z6 | 0,972 | 0,956 | 0,964 | 0,756 | 0,790 | 3,40° |
+| v5-z6-g1 | 0,970 | 0,960 | **0,965** | 0,711 | **0,826** | **3,34°** |
+| v5-z20 | 0,972 | 0,956 | 0,964 | 0,733 | 0,799 | 3,45° |
+| v5-ft | 0,970 | 0,957 | 0,964 | **0,800** | 0,797 | 3,48° |
+
+Toujours ±0,3 point : la validation ne contient pas les zones, elle ne peut pas voir ce qu'elles apportent.
+
+## Suivi réel sur les holdouts (jamais vus)
+
+| modèle | ho1 couv. | ho1 préc. | ho1 carrefours | écart | trop | ho2 couv. | ho2 préc. | ho2 carrefours | écart | trop |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v4-w128-k32 | 96,8 | **94,2** | 13/15 | 1,4 | **62** | 97,1 | 60,6 | 15/20 | 3,3 | 1 363 |
+| v4-w128-k32-g1 | **98,2** | 63,0 | **15/15** | 1,2 | 822 | 96,8 | 58,1 | 14/20 | 3,2 | 1 511 |
+| v5-z6 | 97,2 | 58,9 | 13/15 | 2,0 | 944 | 98,2 | 59,9 | **16/20** | **2,3** | 1 413 |
+| v5-z6-g1 | 96,3 | 82,7 | 13/15 | **1,1** | 270 | **98,6** | **63,3** | 15/20 | 2,7 | **1 230** |
+| v5-z20 | 98,0 | 69,9 | 14/15 | 1,8 | 586 | 97,4 | 57,4 | 14/20 | 3,2 | 1 554 |
+| v5-ft | 97,0 | 85,6 | 13/15 | 1,9 | 211 | 97,0 | 62,6 | 11/20 | 4,1 | 1 251 |
+
+## Suivi relancé sur les six zones corrigées
+
+`trace.py --zone i --seed auto`, référence = l'annotation de la zone, carrefours comptés par `trace.py` dans la zone
+découpée. **Ces zones sont dans l'entraînement des v5** : on mesure si le modèle a appris la correction, pas s'il
+généralise. Marge 10 px (défaut) puis 30 px (le traceur a la place de revenir dans la zone) — carrefours retrouvés /
+annotés :
+
+| zone (id) | v4-w128-k32 | v4 g1 | v5-z6 | v5-z6-g1 | v5-z20 | v5-ft |
+|---|---|---|---|---|---|---|
+| 1 (nœud, 6) | 0/6 → 1/6 | 4/6 → 3/6 | **6/6 → 6/6** | **6/6 → 6/6** | **6/6 → 6/6** | 6/6 → 5/6 |
+| 2 (croix) | 0 → 0 | 0 → 0 | 0 → **1/1** | 0 → **1/1** | 0 → **1/1** | 0 → **1/1** |
+| 3 (croix) | 0 → **1/1** | 0 → 0 | 0 → **1/1** | 0 → **1/1** | 0 → **1/1** | 0 → **1/1** |
+| 4 | 0 → 0 | 0 → 0 | **1/1 → 1/1** | 0 → **1/1** | 0 → **1/1** | 0 → **1/1** |
+| 5 | 0/2 → 0/2 | 0/2 → 0/2 | **2/2 → 2/2** | 0/2 → **2/2** | 0/2 → 1/2 | 0/2 → **2/2** |
+| 6 (8) | 1/8 → 4/8 | 0/8 → 1/8 | **7/8** → 7/8 | **7/8 → 8/8** | **8/8 → 8/8** | 5/8 → **8/8** |
+
+Couverture de l'annotation des zones (marge 30) : v4 43–94 %, v5 81–100 %.
+
+## Ce qu'on peut conclure
+
+1. **Les corrections sont apprises.** Les quatre v5 retrouvent tous les carrefours des six zones (marge 30), là où v4
+   en voyait 1 à 5 sur 18. ×6 suffit ; ×20 n'apporte rien de plus. L'affinage de 5 min (`v5-ft`) les apprend aussi.
+2. **Les holdouts ne bougent pas au-delà du bruit de graine** : carrefours 13–14/15 et 14–16/20 (v4 : 13–15 et 14–15),
+   couverture 96–99 %, précision ho1 59–86 % (v4 : 63–94 %, voir `v4-w128-k32-g1`). Six zones ≈ 950 px contre 22 500 px
+   de graphe : elles corrigent ce qu'elles couvrent, pas plus. C'est le résultat attendu d'une première itération ;
+   l'effet sur la généralisation viendra du **cumul** de zones, à des endroits et sur des configurations variés
+   (et de zones autour des erreurs *de v5*, pas seulement de v4).
+3. **Petites zones = évaluation fragile.** Dans les croix de 60 px (zones 2–3), le traceur parti d'un bout sort de la
+   zone avant d'avoir confirmé la branche latérale (`--confirm 2`) : 0/1 à 10 px de marge, 1/1 à 30 px, pour tous les
+   v5. Pour l'entraînement ça ne gêne pas ; pour juger une zone, la prendre un peu plus large (≈ 150 px).
+4. **Affinage vs réentraînement.** `v5-ft` (10 époques depuis v4) garde la précision ho1 de v4 (85,6 %) et apprend les
+   zones, mais perd 4 carrefours en ho2 (11/20, dans le bruit). Cinq fois moins cher : à retenir quand les zones
+   s'accumuleront, avec ho2 sous surveillance.
+
+## Recommandation
+
+Défaut de l'app inchangé : **`v4-w128-k32`** (aucune v5 ne fait mieux sur les holdouts de façon mesurable). Pour la
+prochaine série de zones, lancer le mode Auto avec **`v5-z6-g1`** : il contient les six corrections, ses erreurs sont
+donc de nouvelles erreurs, et ses holdouts sont les plus équilibrés des v5 (ho1 83 % / 1,1 px ; ho2 98,6 % / 15/20).
+Toujours des outils de proposition à valider.

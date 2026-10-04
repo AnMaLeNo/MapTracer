@@ -277,5 +277,6 @@ validation (une par projet) : fenêtres 96 / 128 / 192, 32 / 64 secteurs, avec /
 inférieurs), deux graines. Résumé : ce sont les **données** qui améliorent le suivi (zone 0202 : couverture au premier
 départ 69 → 97 %, carrefours 12 → 15/20 posés à 3 px), pas les hyperparamètres ; le bruit de graine en suivi réel est du
 même ordre que les écarts entre variantes ; retirer les états bleus n'apporte rien. Les poids (float16) et une note par
-modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`.
+modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`. Les `v5-*` ont appris les six zones corrigées du mode Auto
+(`data/zones/`) : `v5-z6-g1` est celui à utiliser pour chercher de nouvelles erreurs (voir `models/COMPARAISON.md`).
 
