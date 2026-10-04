@@ -43,22 +43,20 @@ function createZone(bbox) {
   const { node } = autoIndex();
   const z = { id: (auto.zones.reduce((m, q) => Math.max(m, q.id), 0) || 0) + 1, bbox: bbox.map(r1), nodes: [], edges: [],
               auto: { nodes: [], edges: [] }, model: project.settings.model || (auto.job && auto.job.model) || '', created: new Date().toISOString(), nextId: 1, edits: 0 };
-  const map = new Map();
-  const add = (x, y, kind, open) => { const n = { id: z.nextId++, x: r1(x), y: r1(y), kind, open: !!open }; z.nodes.push(n); return n.id; };
-  for (const n of auto.graph.nodes) if (inBox(bbox, n.x, n.y)) map.set(n.id, add(n.x, n.y, n.kind === 'start' ? 'normal' : n.kind, false));
+  // Le tracé du modèle dans la zone est gardé pour mémoire (z.auto, affiché en rouge) : la zone elle-même
+  // part vide, l'humain y pose ses propres points comme en mode manuel.
+  const ctxG = { nodes: [], edges: [] }, map = new Map();
+  let nid = 1;
+  const add = (x, y, kind) => { const n = { id: nid++, x: r1(x), y: r1(y), kind }; ctxG.nodes.push(n); return n.id; };
+  for (const n of auto.graph.nodes) if (inBox(bbox, n.x, n.y)) map.set(n.id, add(n.x, n.y, n.kind === 'start' ? 'normal' : n.kind));
   for (const e of auto.graph.edges) {
     const p = node.get(e.from), q = node.get(e.to);
     if (!p || !q) continue;
     const ip = map.has(e.from), iq = map.has(e.to);
-    if (ip && iq) z.edges.push([map.get(e.from), map.get(e.to)]);
-    else if (ip || iq) {                 // coupée par le bord : extrémité ouverte sur le bord
-      const inn = ip ? p : q, out = ip ? q : p, c = clipToBox(bbox, inn, out);
-      z.edges.push([map.get(inn.id), add(c.x, c.y, 'normal', true)]);
-    }
+    if (ip && iq) ctxG.edges.push([map.get(e.from), map.get(e.to)]);
+    else if (ip || iq) { const inn = ip ? p : q, out = ip ? q : p, c = clipToBox(bbox, inn, out); ctxG.edges.push([map.get(inn.id), add(c.x, c.y, 'normal')]); }
   }
-  const deg = zoneDegrees(z);
-  for (const n of z.nodes) if ((deg.get(n.id) || 0) <= 1 && n.kind !== 'end') n.open = true;   // fin non confirmée par le modèle
-  z.auto = { nodes: z.nodes.map(n => ({ ...n })), edges: z.edges.map(e => [...e]) };
+  z.auto = ctxG;
   auto.zones.push(z);
   A.active = auto.zones.length - 1; A.sel = null; A.undo = [];
   autoSave(true); dirty = true; Auto.ui();
@@ -78,9 +76,9 @@ function zoneUndo() {
   autoSave(); dirty = true; Auto.ui();
 }
 function hasEdge(z, a, b) { return z.edges.some(([u, v]) => (u === a && v === b) || (u === b && v === a)); }
-function addNode(x, y, connectTo) {
+function addNode(x, y, connectTo, kind = 'normal') {
   const z = zone(); snapshot();
-  const n = { id: z.nextId++, x: r1(x), y: r1(y), kind: 'normal', open: false };
+  const n = { id: z.nextId++, x: r1(x), y: r1(y), kind, open: false };
   z.nodes.push(n);
   if (connectTo != null && zNode(z, connectTo)) z.edges.push([connectTo, n.id]);
   A.sel = n.id; autoSave(); dirty = true; Auto.ui();
@@ -292,8 +290,14 @@ const Auto = {
   },
   click(e) {
     const r = canvas.getBoundingClientRect(), [mx, my] = toMap(e.clientX - r.left, e.clientY - r.top);
-    if (e.button !== 0) return;
     const z = zone();
+    if (e.button === 2) {                // clic droit : carrefour (nouveau point, ou bascule du type d'un point existant)
+      if (!z || !inBox(z.bbox, mx, my)) return;
+      const id = nodeAt(z, mx, my);
+      if (id != null) { toggleKind(id); A.sel = id; dirty = true; Auto.ui(); return; }
+      return addNode(mx, my, A.sel, 'intersection');
+    }
+    if (e.button !== 0) return;
     if (A.arm || (!auto.graph.nodes.length && !(auto.job && auto.job.status === 'running') && !z)) return startTrace(mx, my);
     if (z && inBox(z.bbox, mx, my)) {
       const h = edgeAt(z, mx, my);
@@ -326,24 +330,26 @@ const Auto = {
     const vis = (x, y) => x > -30 && y > -30 && x < W + 30 && y < H + 30;
     // tracé automatique
     const { node } = autoIndex();
+    const dim = z ? 'rgba(255,77,77,.55)' : 'rgba(255,77,77,.9)';
+    // si le tracé global a été effacé (ou zones importées), le contexte gardé dans la zone active prend le relais
+    const G = (!auto.graph.nodes.length && z && z.auto && z.auto.nodes.length)
+      ? { nodes: z.auto.nodes, edges: z.auto.edges.map(([a, b]) => ({ from: a, to: b })), node: new Map(z.auto.nodes.map(n => [n.id, n])) }
+      : { nodes: auto.graph.nodes, edges: auto.graph.edges, node };
     ctx.lineWidth = Math.max(1, Math.min(3, s));
-    for (const e of auto.graph.edges) {
-      const a = node.get(e.from), b = node.get(e.to); if (!a || !b) continue;
+    for (const e of G.edges) {
+      const a = G.node.get(e.from), b = G.node.get(e.to); if (!a || !b) continue;
       const [x0, y0] = toScreen(a.x, a.y), [x1, y1] = toScreen(b.x, b.y);
       if (!vis(x0, y0) && !vis(x1, y1)) continue;
-      const inZ = z && inBox(z.bbox, a.x, a.y) && inBox(z.bbox, b.x, b.y);
-      ctx.strokeStyle = inZ ? 'rgba(255,255,255,.25)' : 'rgba(255,77,77,.9)'; ctx.setLineDash(inZ ? [3, 3] : []);
+      ctx.strokeStyle = dim;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     }
-    ctx.setLineDash([]);
     const r = Math.max(2.5, Math.min(6, s * 1.3));
-    for (const n of auto.graph.nodes) {
-      if (z && inBox(z.bbox, n.x, n.y)) continue;
+    for (const n of G.nodes) {
       const [x, y] = toScreen(n.x, n.y); if (!vis(x, y)) continue;
       if (n.kind === 'intersection') { ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r * 1.3, 0, 7); ctx.stroke(); }
       else if (n.kind === 'end') { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke(); }
       else if (n.kind === 'start') { ctx.fillStyle = '#39c47c'; ctx.beginPath(); ctx.arc(x, y, r * 1.4, 0, 7); ctx.fill(); }
-      else if (s > 2.5) { ctx.fillStyle = 'rgba(255,77,77,.9)'; ctx.beginPath(); ctx.arc(x, y, Math.min(2.5, s * 0.5), 0, 7); ctx.fill(); }
+      else if (s > 2.5) { ctx.fillStyle = dim; ctx.beginPath(); ctx.arc(x, y, Math.min(2.5, s * 0.5), 0, 7); ctx.fill(); }
     }
     // zones
     ctx.font = '12px system-ui, sans-serif'; ctx.textBaseline = 'bottom';
@@ -416,9 +422,9 @@ const Auto = {
     if (!img) st.textContent = 'Chargez une carte (liste).';
     else if (A.arm) st.textContent = 'Cliquez le nouveau point de départ sur une galerie.';
     else if (!auto.graph.nodes.length && !running) st.textContent = 'Cliquez un point de départ sur une galerie : le modèle trace tout ce qu’il peut.';
-    else if (z) st.textContent = A.sel != null ? `Zone ${z.id}, point ${A.sel} sélectionné : glisser = déplacer, clic dans le vide = point suivant, Ctrl+clic sur un point = relier/délier, Suppr, F = cul-de-sac, I = intersection, Échap.`
-                                               : `Zone ${z.id} : cliquez un point pour le sélectionner, glissez pour le déplacer, clic sur un segment = insérer un point, clic dans le vide = nouveau point isolé.`;
-    else st.textContent = running ? 'Le modèle trace… repérez les erreurs ; Maj+glisser découpe une zone à corriger.' : 'Inspectez le tracé rouge ; Maj+glisser autour d’une erreur pour la corriger.';
+    else if (z) st.textContent = A.sel != null ? `Zone ${z.id}, point ${A.sel} : clic = point suivant · clic droit = carrefour · F = cul-de-sac · Échap = finir cette branche (puis cliquez un point pour en repartir).`
+                                               : `Zone ${z.id} : annotez par-dessus le tracé rouge comme en mode manuel — clic = premier point, puis clic = point suivant, clic droit = carrefour, F = cul-de-sac.`;
+    else st.textContent = running ? 'Le modèle trace… repérez les erreurs ; Maj+glisser découpe une zone à annoter.' : 'Inspectez le tracé rouge ; Maj+glisser autour d’une erreur, puis annotez la zone à la main.';
     $('hud').textContent = running ? `suivi : ${j.steps || 0} pas · ${j.branches || 0} branches · ${j.queue || 0} en file` : (z ? `zone ${z.id}` : '');
   },
 };

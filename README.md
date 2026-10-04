@@ -73,13 +73,13 @@ corrigée devient un mini-dataset d'exemples difficiles pour le prochain entraî
    et l'app affiche le tracé rouge au fur et à mesure (`GET /api/trace/<job>` toutes les 0,7 s). « Arrêter le suivi » garde
    ce qui est tracé ; « Nouveau départ » relance ailleurs **en prolongeant** le tracé existant. Les carrefours posés sont
    cerclés d'orange, les culs-de-sac annoncés par le modèle marqués d'une croix.
-2. Inspecter, puis **Maj+glisser** autour d'une erreur : la zone (jaune) extrait le sous-graphe du tracé ; les galeries coupées
-   par le bord se terminent sur une extrémité **ouverte** (anneau pointillé) — ce n'est pas un cul-de-sac, l'oracle ignore les
-   états dont la visée l'atteint. Le tracé d'origine reste visible en gris dans la zone.
-3. Corriger les points **à la main** dans la zone : glisser = déplacer · clic = sélectionner · clic dans le vide = point suivant
-   relié au point sélectionné (ou point isolé si rien n'est sélectionné) · clic sur un segment = y insérer un point ·
-   `Ctrl`+clic sur un autre point = relier / délier · `Suppr` = supprimer · `F` = cul-de-sac ↔ ouvert (extrémité) · `I` = type
-   intersection ↔ normal · `Ctrl+Z` = annuler · `Échap` = désélectionner puis quitter la zone. Corrigez **toutes** les
+2. Inspecter, puis **Maj+glisser** autour d'une erreur : la zone (jaune) est **vierge** ; le tracé rouge du modèle reste
+   visible dessous (et gardé dans `zone.auto`) pour voir l'erreur pendant qu'on annote.
+3. Annoter la zone **à la main**, comme en mode manuel : clic = premier point, clic = point suivant relié au précédent,
+   clic droit = carrefour, `F` = cul-de-sac, `Échap` = finir la branche puis clic sur un point pour en repartir. Quelques
+   points suffisent (un carrefour + 2–3 points par branche). Toute extrémité non marquée `F` est **ouverte** (anneau
+   pointillé) : ce n'est pas un cul-de-sac, l'oracle ignore les états dont la visée l'atteint. Retouches : glisser = déplacer ·
+   clic sur un segment = insérer · `Ctrl`+clic = relier / délier · `Suppr` · `I` = type · `Ctrl+Z`. Annotez **toutes** les
    galeries de la zone : une galerie oubliée à un carrefour, c'est une direction fausse enseignée.
 4. « Exporter les zones corrigées » → un fichier `*.mapzones.json` (toutes les zones, réimportable) :
 

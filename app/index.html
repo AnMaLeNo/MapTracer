@@ -59,7 +59,7 @@
 
   <section class="mode-auto">
     <h2>Zones à corriger <span id="zoneCount" class="pill">0</span></h2>
-    <p class="muted small"><kbd>Maj</kbd>+glisser sur la carte découpe une zone autour d'une erreur ; ses points deviennent modifiables.</p>
+    <p class="muted small"><kbd>Maj</kbd>+glisser sur la carte découpe une zone autour d'une erreur ; le tracé du modèle y reste visible et vous annotez par-dessus.</p>
     <ol id="zones" class="list"></ol>
     <div class="btns">
       <button id="btnZoneDelete" disabled>Supprimer la zone active</button>
@@ -122,9 +122,10 @@
     <h2>Mode Auto</h2>
     <ul>
       <li>Choisissez le modèle, puis <b>cliquez</b> un point de départ sur une galerie : le serveur suit le modèle dans toutes les directions et le tracé (rouge) apparaît au fur et à mesure. « Nouveau départ » relance depuis un autre point en gardant le tracé.</li>
-      <li>Repérez une erreur, <kbd>Maj</kbd>+glisser : la zone (jaune) isole les points du tracé ; les galeries coupées par le bord deviennent des extrémités <b>ouvertes</b> (anneau pointillé), jamais des culs-de-sac.</li>
-      <li>Dans la zone : <b>glisser</b> un point = déplacer · clic sur un point = sélectionner · clic dans le vide = ajouter un point relié au point sélectionné · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier · <kbd>Suppr</kbd> = supprimer · <kbd>F</kbd> = cul-de-sac ↔ ouvert (extrémité) · <kbd>I</kbd> = type intersection ↔ normal · <kbd>Ctrl+Z</kbd> = annuler · <kbd>Échap</kbd> = désélectionner / quitter la zone.</li>
-      <li>Corrigez <b>toutes</b> les galeries de la zone (une galerie oubliée = une direction fausse apprise), puis exportez : chaque zone devient un mini-dataset d'exemples difficiles.</li>
+      <li>Repérez une erreur, <kbd>Maj</kbd>+glisser : la zone (jaune) est vierge, le tracé rouge du modèle reste dessous pour voir l'erreur.</li>
+      <li>Annotez comme en mode manuel : clic = premier point, clic = point suivant (relié au précédent), <b>clic droit</b> = carrefour, <kbd>F</kbd> = cul-de-sac, <kbd>Échap</kbd> = finir la branche puis clic sur un point pour repartir de là. Quelques points suffisent (un carrefour + 2–3 points par branche) ; une extrémité non marquée <kbd>F</kbd> est <b>ouverte</b> (anneau pointillé) et jamais apprise comme cul-de-sac.</li>
+      <li>Retouches : glisser un point = déplacer · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier · <kbd>Suppr</kbd> · <kbd>I</kbd> = type · <kbd>Ctrl+Z</kbd>.</li>
+      <li>Annotez <b>toutes</b> les galeries de la zone (une galerie oubliée = une direction fausse apprise), <kbd>Échap</kbd> pour quitter, zone suivante ; exportez quand vous voulez : chaque zone devient un mini-dataset d'exemples difficiles.</li>
     </ul>
   </section>
 
