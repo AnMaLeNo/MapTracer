@@ -10,9 +10,19 @@ Sans aucun modèle, l'app fonctionne en mode manuel seulement (l'API répond 503
 Mode Auto : POST /api/trace {map, model, x, y[, heading, graph, max_steps, thr]} lance en arrière-plan la boucle de suivi
 complète de tools/trace.py depuis ce point (en prolongeant `graph` s'il est donné) et renvoie {job} ; GET /api/trace/<job>
 donne l'avancement et le graphe produit jusque-là ; POST /api/trace/<job>/stop l'interrompt."""
-import argparse, http.server, importlib, importlib.util, json, os, sys, threading, time
+import argparse, http.server, importlib, importlib.util, json, os, subprocess, sys, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+def git_commit():
+    """Commit courant du dépôt (pour la provenance des exports), None hors dépôt git."""
+    try:
+        return subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=5).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+COMMIT = git_commit()
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
 ARGS = None
@@ -184,7 +194,7 @@ class H(http.server.SimpleHTTPRequestHandler):
             if ok:
                 m, _, _ = get_model(ok[0]['name'])
                 device = str(m.device) if m else None
-            return self.reply(200 if ok else 503, {'available': bool(ok), 'models': lst, 'device': device,
+            return self.reply(200 if ok else 503, {'available': bool(ok), 'models': lst, 'device': device, 'commit': COMMIT,
                                                    'error': None if ok else (lst[0]['error'] if lst else NO_MODEL)})
         return super().do_GET()
 

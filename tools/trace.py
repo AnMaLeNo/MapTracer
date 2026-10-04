@@ -356,12 +356,40 @@ def render(img, ref, out, path, margin=40, scale=1):
     im.save(path)
 
 
+def load_reference(path, zone=None, margin=0.0):
+    """Référence d'un projet maptracer/1 (graphe complet) ou d'un fichier maptracer-zones/1 (graphes corrigés à la main,
+    bords = extrémités ouvertes). Renvoie (dict du fichier, graphe, bbox par défaut ou None)."""
+    d = json.load(open(path, encoding='utf-8'))
+    if d.get('format') != G.ZONES_FORMAT:
+        return d, G.graph_from_project(G.load_project(path)), None
+    zones = d.get('zones', [])
+    if zone is not None:
+        zs = [zones[zone]]
+        b = zs[0]['bbox']
+        bbox = [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin]
+    else:
+        zs, bbox = zones, None
+    g = G.Graph(); g.open = set(); off = 0
+    for z in zs:
+        zg = G.graph_from_zone(z)
+        for n, p in zg.nodes.items():
+            g.add_node(p['x'], p['y'], p['kind'], n + off)
+        for a, b in zg.edges:
+            g.add_edge(a + off, b + off)
+        g.open |= {n + off for n in zg.open}
+        off += (max(zg.nodes) if zg.nodes else 0) + 1
+    return d, g, bbox
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('project'); ap.add_argument('image')
     ap.add_argument('-o', '--out', default='trace_out')
     ap.add_argument('--model', default='oracle', help="'oracle' (faux modèle lu dans le tracé manuel) ou chemin d’un model.pt de train.py")
     ap.add_argument('--bbox', help='x0,y0,x1,y1 : limiter le suivi et la comparaison à cette zone (ex. zone de validation)')
+    ap.add_argument('--zone', type=int, help='fichier maptracer-zones/1 : index (0…) de la zone corrigée servant de référence '
+                    '(bbox = celui de la zone, élargi de --zone-margin) ; sans --zone, toutes les zones forment la référence')
+    ap.add_argument('--zone-margin', type=float, default=0.0, help='marge (px) ajoutée autour du bbox de la zone (--zone)')
     ap.add_argument('--device', help='cuda / cpu pour le modèle appris')
     ap.add_argument('--step', type=float, default=4); ap.add_argument('--lookahead', type=float, help='défaut 4×pas')
     ap.add_argument('--sectors', type=int, default=32); ap.add_argument('--window', type=int, default=128)
@@ -383,10 +411,9 @@ def main():
     L = args.lookahead or 4 * args.step
     rng = random.Random(args.rng)
 
-    proj = G.load_project(args.project)
-    ref_full = G.graph_from_project(proj)
+    proj, ref_full, zone_bbox = load_reference(args.project, args.zone, args.zone_margin)
     img = Image.open(args.image).convert('RGB')
-    bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else None
+    bbox = [float(v) for v in args.bbox.split(',')] if args.bbox else zone_bbox
     ref = clip_graph(ref_full, bbox) if bbox else ref_full
     trace_width = 3
     if args.model == 'oracle':

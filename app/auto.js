@@ -189,8 +189,14 @@ function normalizedZone(z) {       // `open` cohérent avec le graphe : toute ex
 }
 function zonesExport() {
   if (!auto.zones.length) return warn('Aucune zone à exporter (Maj+glisser sur le tracé).');
+  const j = auto.job || {};
   const out = { format: ZFORMAT, rev: 1, name: auto.name || project.name || '', map: auto.map || project.map, exported: new Date().toISOString(),
-                seeds: auto.seeds, zones: auto.zones.map(normalizedZone) };
+                // provenance, pour qui entraîne : d'où viennent ces zones et ce que le modèle avait tracé
+                provenance: { mode: 'auto', app: { commit: (modelInfo && modelInfo.commit) || null, url: location.href.split('?')[0], userAgent: navigator.userAgent },
+                              model: j.model || project.settings.model || null, server: modelInfo ? { device: modelInfo.device, commit: modelInfo.commit || null } : null,
+                              budget: auto.budget, job: j.id ? { status: j.status, steps: j.steps, branches: j.branches, reasons: j.reasons, elapsed_s: j.elapsed } : null,
+                              zones_models: [...new Set(auto.zones.map(z => z.model).filter(Boolean))] },
+                seeds: auto.seeds, trace: { nodes: auto.graph.nodes, edges: auto.graph.edges }, zones: auto.zones.map(normalizedZone) };
   const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = `${(out.name || (out.map && out.map.id) || 'zones').replace(/[^\w.-]+/g, '_')}.mapzones.json`;
@@ -206,6 +212,7 @@ async function zonesImport(f) {
     auto.zones = replace ? zs : auto.zones.concat(zs);
     auto.zones.forEach((z, i) => { z.id = i + 1; });
     if (replace) { auto.name = p.name || auto.name; if (p.seeds) auto.seeds = p.seeds; if (p.map) auto.map = p.map; }
+    if (p.trace && Array.isArray(p.trace.nodes) && (replace || !auto.graph.nodes.length)) { auto.graph = { nodes: p.trace.nodes, edges: p.trace.edges || [] }; A.idxOf = null; }
     A.active = null; A.sel = null; A.undo = [];
     await autoSave(true); dirty = true; Auto.ui();
   } catch (err) { warn('Import impossible : ' + err.message); }
