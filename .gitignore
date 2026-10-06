@@ -6,3 +6,6 @@ node_modules/
 # Sorties locales (datasets exportés, crops)
 dataset/
 exports/
+
+# Environnement Python local
+.venv/

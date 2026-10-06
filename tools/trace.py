@@ -390,7 +390,7 @@ def main():
     ap.add_argument('--zone', type=int, help='fichier maptracer-zones/1 : index (0…) de la zone corrigée servant de référence '
                     '(bbox = celui de la zone, élargi de --zone-margin) ; sans --zone, toutes les zones forment la référence')
     ap.add_argument('--zone-margin', type=float, default=0.0, help='marge (px) ajoutée autour du bbox de la zone (--zone)')
-    ap.add_argument('--device', help='cuda / cpu pour le modèle appris')
+    ap.add_argument('--device', help='cuda / mps / cpu pour le modèle appris (défaut : le meilleur disponible)')
     ap.add_argument('--step', type=float, default=4); ap.add_argument('--lookahead', type=float, help='défaut 4×pas')
     ap.add_argument('--sectors', type=int, default=32); ap.add_argument('--window', type=int, default=128)
     ap.add_argument('--thr', type=float, default=0.5, help='seuil d’activation d’un secteur')

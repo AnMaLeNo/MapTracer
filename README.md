@@ -10,9 +10,25 @@ points déjà posés, et doit décider du **prochain point**. Chaque clic humain
 ## Lancer l'application
 
 ```bash
-python3 server.py                                   # http://127.0.0.1:8080/app/ — manuel + assisté + Auto avec les modèles de models/
-python3 server.py 8080 --model runs/x/model.pt      # ajoute un model.pt isolé à la liste ; --device cuda|cpu
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt     # une fois (Mac ou Linux)
+.venv/bin/python server.py                          # http://127.0.0.1:8080/app/ — manuel + assisté + Auto avec les modèles de models/
+.venv/bin/python server.py 8080 --model runs/x/model.pt   # ajoute un model.pt isolé à la liste ; --device cuda|mps|cpu
 ```
+
+**Mac à puce Apple ou PC avec carte NVIDIA : mêmes commandes.** Sans `--device`, le serveur et les outils (`train.py`,
+`trace.py`, `audit.py`) prennent `cuda` (NVIDIA), sinon `mps` (GPU des puces Apple M1…M5), sinon `cpu`. Sur MPS,
+les états isolés (mode Auto et mode assisté, un pas après l'autre) passent sur une copie CPU du réseau, plus rapide
+pour un lot de 1 sur puce Apple, et tout ce qui va par lots (audit, entraînement) sur le GPU. Les passes GPU concurrentes
+du serveur y sont sérialisées (MPS ne les supporte pas). Mesures sur MacBook M5 (modèle `v5-z6-g1`) :
+
+| tâche | CPU | MPS |
+|---|---|---|
+| audit d'un projet (4 211 états, `tools/audit.py`) | 24 s | 4 s |
+| entraînement (2 400 exemples, fenêtre 128, une époque) | 32 s | 5,3 s |
+| mode Auto (suivi pas à pas) | 167 pas/s | 167 pas/s (copie CPU) |
+
+Les résultats sont les mêmes d'un appareil à l'autre à l'arrondi float32 près (écart de probabilité ≤ 3·10⁻⁶) ; un
+suivi long peut donc bifurquer différemment là où une probabilité est pile au seuil.
 
 Les modèles livrés sont dans `models/<nom>/` (`model.pt` en float16 + `NOTES.md` : stratégie, résultats, limites) ; le
 serveur les liste et l'app les propose dans le menu « Modèle » (voir `models/README.md`). Aucune dépendance pour le mode manuel : HTML/JS pur (le mode assisté demande `torch`/`torchvision`, voir plus bas). La carte Nexus 2011 (6307 px, géoréférencée) est fournie dans `maps/` ; toute autre image
@@ -144,7 +160,7 @@ le navigateur. En ligne de commande :
 
 ```bash
 python3 tools/audit.py data/projects/nexus_alkhemia_2011-0202.maptracer.json maps/nexus_alkhemia_2011.jpg \
-        --model models/v5-z6-g1/model.pt -o audit.json          # 4 700 états, ~1 min sur CPU, ~5 s sur GPU
+        --model models/v5-z6-g1/model.pt -o audit.json          # 4 700 états, ~25 s à 1 min sur CPU, ~5 s sur GPU (CUDA ou MPS)
 ```
 
 Premier passage de `v5-z6-g1` sur `-0202` (4 734 états) : 67 anomalies — 2 `end_missed`, 8 `false_end`, 49 `branch_missed`,
@@ -166,7 +182,7 @@ python3 tools/oracle.py data/projects/nexus_alkhemia_2011.maptracer.json data/pr
         data/zones/*.mapzones.json maps/nexus_alkhemia_2011.jpg -o dataset/v6 \
         --window 128 --step 2 --lookahead 6 --near 6 --sectors 32 --aug 2 --zone-aug 6 \
         --holdout 4200,3200,5800,3600 --holdout 3000,2500,4100,2900
-python3 tools/train.py dataset/v6 -o runs/v6 --epochs 30 --device cuda          # ou --init models/v5-z6-g1/model.pt --epochs 10
+python3 tools/train.py dataset/v6 -o runs/v6 --epochs 30                       # cuda ou mps auto ; ou --init models/v5-z6-g1/model.pt --epochs 10
 ```
 
 ## Format des données
@@ -276,7 +292,7 @@ doublons, et la politique de confiance/rejet d'un modèle appris reste à défin
 
 ## Modèle appris (`tools/model.py`, `tools/train.py`)
 
-Dépendances : `pip install torch torchvision` (le reste de l'outil n'en a pas besoin).
+Dépendances : `pip install -r requirements.txt` (torch, torchvision ; le reste de l'outil n'en a pas besoin). Mac (MPS) et NVIDIA (CUDA) : voir « Lancer l'application ».
 
 - **Réseau** : ResNet-18 pré-entraîné ImageNet, première convolution élargie à **4 canaux** (RGB carte + canal « déjà
   tracé », 4ᵉ canal initialisé par la moyenne des poids RGB), couche finale remplacée par une linéaire à **32 sorties**.
