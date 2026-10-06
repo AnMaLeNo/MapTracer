@@ -182,7 +182,7 @@ python3 tools/oracle.py data/projects/nexus_alkhemia_2011.maptracer.json data/pr
         data/zones/*.mapzones.json maps/nexus_alkhemia_2011.jpg -o dataset/v6 \
         --window 128 --step 2 --lookahead 6 --near 6 --sectors 32 --aug 2 --zone-aug 6 \
         --holdout 4200,3200,5800,3600 --holdout 3000,2500,4100,2900
-python3 tools/train.py dataset/v6 -o runs/v6 --epochs 30                       # cuda ou mps auto ; ou --init models/v5-z6-g1/model.pt --epochs 10
+python3 tools/train.py dataset/v6 -o runs/v6 --epochs 10 --lr 1e-4 --init models/v6-ft/model.pt   # affinage (recommandé, 5 min sur GPU) ; sans --init : 30 époques
 ```
 
 ## Format des données
@@ -344,6 +344,14 @@ validation (une par projet) : fenêtres 96 / 128 / 192, 32 / 64 secteurs, avec /
 inférieurs), deux graines. Résumé : ce sont les **données** qui améliorent le suivi (zone 0202 : couverture au premier
 départ 69 → 97 %, carrefours 12 → 15/20 posés à 3 px), pas les hyperparamètres ; le bruit de graine en suivi réel est du
 même ordre que les écarts entre variantes ; retirer les états bleus n'apporte rien. Les poids (float16) et une note par
-modèle sont dans `models/<nom>/` ; modèle recommandé par défaut : `v4-w128-k32`. Les `v5-*` ont appris les six zones corrigées du mode Auto
-(`data/zones/`) : `v5-z6-g1` est celui à utiliser pour chercher de nouvelles erreurs (voir `models/COMPARAISON.md`).
+modèle sont dans `models/<nom>/`. Les `v5-*` ont appris les six zones corrigées du mode Auto (`data/zones/`).
+
+### Campagne v6 (deux projets + 14 zones) — voir `models/COMPARAISON.md`
+
+Dataset `v6` : les deux projets + les trois lots de `data/zones/` (sud, sud2, nord-est : 88 304 exemples, un tiers tirés des
+zones). Résumé : les zones sont apprises (nord-est 49 → 90–95 % de couverture, 18 → 56–60/65 carrefours), les holdouts
+gagnent un carrefour ou deux (14/15, 16–17/20 — petit, mais tous les v6 sont au-dessus des v4/v5), et **réentraîner de zéro
+avec autant de zones denses fait perdre la précision** (ho1 : 83 → 57–68 %, deux graines concordantes) alors que l'affinage
+de 10 époques depuis `v5-z6-g1` la conserve. **Modèle recommandé : `v6-ft`** (mode assisté et mode Auto) ; `v6-z14` est la
+variante exploratrice (couvre plus, se trompe plus). Prochaines zones : affiner depuis `v6-ft` plutôt que réentraîner.
 
