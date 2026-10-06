@@ -427,6 +427,7 @@ const Auto = {
     }
     // départs
     for (const [x, y] of auto.seeds) { const [sx, sy] = toScreen(x, y); if (!vis(sx, sy)) continue; ctx.strokeStyle = '#39c47c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.moveTo(sx - 13, sy); ctx.lineTo(sx + 13, sy); ctx.moveTo(sx, sy - 13); ctx.lineTo(sx, sy + 13); ctx.stroke(); }
+    Audit.draw();
   },
   ui() {
     if (typeof mode !== 'undefined' && mode !== 'auto') { $('hud').textContent = ''; return; }
@@ -437,7 +438,7 @@ const Auto = {
     const names = { running: 'en cours', done: 'terminé (plus rien à suivre)', budget: 'arrêté : budget de pas atteint', stopped: 'arrêté à la main', error: 'erreur', lost: 'perdu (serveur redémarré ?)' };
     const reasons = r => r ? Object.entries(r).map(([k, v]) => `${{ end: 'culs-de-sac', junction: 'jonctions', low_confidence: 'perdu', out_of_map: 'bord de carte', max_steps: 'budget' }[k] || k} ${v}`).join(', ') : '';
     $('autoInfo').innerHTML = j ? `Suivi ${names[j.status] || j.status} — modèle <b>${j.model || ''}</b>${j.steps != null ? ` · ${j.steps} pas, ${j.branches} branches, ${j.queue} en file, ${j.elapsed || 0} s` : ''}` +
-      (j.reasons ? `<br>Fins de branches : ${reasons(j.reasons)}` : '') + (j.error ? `<br>${j.error}` : '') : 'Aucun tracé : choisissez un modèle et cliquez un point de départ sur une galerie.';
+      (j.reasons ? `<br>Fins de branches : ${reasons(j.reasons)}` : '') + (j.error ? `<br>${j.error}` : '') : auto.graph.nodes.length ? `Tracé importé (<b>${auto.graph.nodes.length}</b> pts, ${auto.seeds.length} départ(s)) — « Nouveau départ » pour le prolonger.` : 'Aucun tracé : choisissez un modèle et cliquez un point de départ sur une galerie.';
     $('btnAutoStop').disabled = !running;
     $('btnAutoSeed').classList.toggle('active', A.arm);
     $('btnAutoSeed').textContent = A.arm ? 'Cliquez sur la carte… (Échap pour annuler)' : 'Nouveau départ : cliquer sur la carte';
