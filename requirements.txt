@@ -1,0 +1,7 @@
+# Mode assisté / Auto / audit / entraînement (le mode manuel n'a besoin de rien : HTML/JS pur).
+# Même fichier sur Mac à puce Apple (GPU via MPS) et sur Linux/Windows avec carte NVIDIA (CUDA) : la roue PyTorch par
+# défaut de pip inclut CUDA sous Linux ; sous Windows, voir https://pytorch.org/get-started/locally/ pour l'index CUDA.
+torch>=2.3
+torchvision>=0.18
+numpy
+pillow

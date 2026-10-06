@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Détecteur d'anomalies d'annotation : un modèle déjà entraîné rejoue chaque point annoté et signale ses désaccords.
 
-    python3 tools/audit.py PROJET_OU_ZONES… IMAGE --model models/v5-z6-g1/model.pt [-o audit.json] [--thr 0.5] [--device cuda]
+    python3 tools/audit.py PROJET_OU_ZONES… IMAGE --model models/v5-z6-g1/model.pt [-o audit.json] [--thr 0.5] [--device cuda|mps|cpu]
 
 Le modèle n'est pas la vérité : un désaccord est soit une erreur d'annotation (cul-de-sac oublié, galerie annotée à côté
 de l'axe, branche non annotée), soit un endroit où le modèle a justement besoin de l'exemple. C'est à l'humain de trancher
@@ -62,8 +62,8 @@ class Batcher:
 
     def __init__(self, model, img, batch=64):
         import torch
-        from model import to_tensor, normalize
-        self.torch, self.to_tensor, self.normalize = torch, to_tensor, normalize
+        from model import to_tensor
+        self.torch, self.to_tensor = torch, to_tensor
         self.model, self.img, self.batch = model, img, batch
         self.W, self.tw = model.meta['window'], model.meta['trace_width']
         self.items = []
@@ -75,13 +75,10 @@ class Batcher:
 
     def flush(self):
         out = []
-        torch = self.torch
-        with torch.no_grad():
-            for i in range(0, len(self.items), self.batch):
-                chunk = self.items[i:i + self.batch]
-                x = self.normalize(torch.stack([c for c, _ in chunk]).to(self.model.device))
-                probs = torch.sigmoid(self.model.net(x)).cpu().tolist()
-                out += [(p, pl) for p, (_, pl) in zip(probs, chunk)]
+        for i in range(0, len(self.items), self.batch):
+            chunk = self.items[i:i + self.batch]
+            probs = self.model.probs(self.torch.stack([c for c, _ in chunk]))
+            out += [(p, pl) for p, (_, pl) in zip(probs, chunk)]
         self.items = []
         return out
 
@@ -217,7 +214,7 @@ def main():
     ap.add_argument('--weak', type=float, default=0.15, help='en dessous : le modèle « ne voit pas » la galerie annotée')
     ap.add_argument('--spacing', type=float, help='distance entre états le long des arêtes (défaut 2×pas)')
     ap.add_argument('--cluster', type=float, default=8.0, help='rayon (px) de regroupement des anomalies de même type')
-    ap.add_argument('--device')
+    ap.add_argument('--device', help='cuda / mps / cpu (défaut : le meilleur disponible)')
     args = ap.parse_args()
     from PIL import Image
     from model import LearnedModel

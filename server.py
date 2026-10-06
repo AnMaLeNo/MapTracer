@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Serveur de l'application d'annotation : fichiers statiques (sans cache) + API du mode assisté.
 
-    python3 server.py [port] [--models-dir models] [--model runs/v2/model.pt] [--device cuda|cpu]
+    python3 server.py [port] [--models-dir models] [--model runs/v2/model.pt] [--device cuda|mps|cpu]
 
 Les modèles sont les sous-dossiers de --models-dir (défaut : models/ s'il existe) contenant un model.pt ; l'app en
 propose la liste et chaque requête /api/predict nomme le modèle voulu (`model`). --model ajoute un fichier isolé.
@@ -299,7 +299,7 @@ if __name__ == '__main__':
     ap.add_argument('port', nargs='?', type=int, default=8080)
     ap.add_argument('--models-dir', help='dossier de modèles (un sous-dossier par modèle, avec model.pt ; défaut : models/)')
     ap.add_argument('--model', help='model.pt isolé de tools/train.py, ajouté à la liste')
-    ap.add_argument('--device', help='cuda / cpu')
+    ap.add_argument('--device', help='cuda / mps / cpu (défaut : cuda, sinon mps sur Mac à puce Apple, sinon cpu)')
     ARGS = ap.parse_args()
     http.server.ThreadingHTTPServer.allow_reuse_address = True
     with http.server.ThreadingHTTPServer(('0.0.0.0', ARGS.port), H) as srv:

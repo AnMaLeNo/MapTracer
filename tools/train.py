@@ -111,7 +111,7 @@ def main():
     ap.add_argument('--wd', type=float, default=1e-4)
     ap.add_argument('--thr', type=float, default=0.5)
     ap.add_argument('--tol-deg', type=float, default=17.0, help='tolérance d’appariement des directions (1,5 secteur)')
-    ap.add_argument('--device', help='cuda / cpu (défaut : cuda si dispo)')
+    ap.add_argument('--device', help='cuda / mps / cpu (défaut : cuda, sinon mps sur Mac à puce Apple, sinon cpu)')
     ap.add_argument('--no-pretrained', action='store_true')
     ap.add_argument('--init', help='model.pt dont repartir (affinage : poids chargés à la place de ceux d’ImageNet)')
     ap.add_argument('--no-aug', action='store_true')
