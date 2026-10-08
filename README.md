@@ -137,27 +137,30 @@ la suit maintenant. Attention : les zones ayant servi à l'entraînement, ce chi
 pas la généralisation — celle-ci se lit sur les deux holdouts. Le mode Auto ne rend pas le modèle autonome :
 c'est l'outil qui mesure ses erreurs et les transforme en données.
 
-## Pas à pas + baguette magique — preuve de concept (`tools/wand.py`, `/api/wand`, `/api/trace/<id>/step`)
+## Mode « Baguette magique » — preuve de concept (`app/wand.js`, `tools/magic_wand.py`, `/api/wand`, `/api/trace/<id>/step`)
 
-Section « Pas à pas + baguette magique » du mode Auto. Deux outils pour *regarder*, rien n'est enregistré :
+Troisième mode de l'app, pour *regarder* ce que sélectionne un remplissage flou depuis un point de galerie et où il déborde.
+Rien n'est enregistré ni transmis au modèle.
 
-- **Pas à pas** : « Départ pas à pas » puis <kbd>N</kbd> (ou « Pas suivant × n ») fait avancer la boucle de suivi normale
-  (`tools/trace.py`, même modèle, mêmes règles de branches) d'un pas à la fois. Côté serveur, le job est lancé avec `step: true`
-  et son `hook` bloque après chaque prédiction jusqu'à `POST /api/trace/<id>/step {n}` (`n ≤ 0` = reprise en continu) ; le
-  snapshot expose `cursor` = `{x, y, heading, probs}` du point courant, dessiné en rose des 32 directions (vert = au-dessus du seuil).
-  Un pas à pas laissé en pause une heure est arrêté.
-- **Baguette magique** (`tools/wand.py`, scipy) : remplissage flou depuis un point — pixels dont chaque canal RGB est à ≤ tolérance
-  de la couleur de référence (le pixel cliqué, ou le ton clair dominant du voisinage s'il tombe sur un trait), composante
-  **4-connexe** contenant le point (un trait fin diagonal bloque), dans une fenêtre de rayon réglable. Le point suivi est le point
-  courant du pas à pas, le point d'annotation sélectionné, ou un point sondé (<kbd>W</kbd> puis clic). <kbd>[</kbd> / <kbd>]</kbd>
-  changent la tolérance. Retour : masque (surimpression cyan), statistiques de forme (aire, rectangle, taux de remplissage,
-  largeur ≈ 2·aire/périmètre, allongement par ACP, trous), mur le plus proche au point, **centre suggéré** (maximum de la
-  transformée de distance à ≤ 12 px du point, point jaune et son rayon libre), et le **balayage** aire(tolérance) pour
-  0…128 par pas de 4 (courbe, log) avec une tolérance « proposée » = cran avant le premier bond d'aire ×2,5 — heuristique à
-  regarder, pas une décision : sur une salle ou une galerie large le bond arrive dès les premières tolérances.
+1. **Clic** dans le blanc d'une galerie → `POST /api/wand` : composante **4-connexe** (un trait fin diagonal bloque) des pixels dont
+   chaque canal RGB est à ≤ tolérance de la couleur de référence (pixel cliqué, ou 90e centile clair du voisinage 7×7 si le point
+   tombe sur un trait → départ déplacé de ≤ 8 px), dans une fenêtre de rayon 128–512 px. Affiché : masque coloré (couleur et
+   opacité réglables, liseré pour les galeries de 2–3 px), centre suggéré (max de la transformée de distance à ≤ 12 px du point,
+   jaune, avec son rayon libre), **lecture heuristique** (galerie fine / galerie / salle / débordement, d'après largeur ≈
+   2·aire/périmètre, allongement par ACP, remplissage, contact avec le bord), détails chiffrés, et la **courbe aire(tolérance)**
+   pour 0…128 par 4 (log ; pointillé jaune = largeur ; rouge = touche le bord).
+2. **Tolérance** au curseur ou `[` `]`. En « automatique » (défaut), elle se cale sur le cran avant le premier bond d'aire ×2,5 du
+   balayage — heuristique : sur une salle ou une galerie large le bond arrive dès 4–8, sur une galerie fine bouchée par le JPEG il
+   faut souvent ≥ 36. Toucher le curseur désactive l'automatique.
+3. **Entrée** lance la boucle de suivi normale (`tools/trace.py`, même modèle, mêmes règles de branches) depuis le point cliqué en
+   pas à pas ; **N** = un pas ; « Continuer en continu » reprend le suivi normal. Côté serveur : `POST /api/trace {step: true}`,
+   le `hook` (appelé après la prédiction, `tr.cursor = {node, x, y, heading, probs}`) bloque sur une `threading.Condition`
+   jusqu'à `POST /api/trace/<id>/step {n}` (`n ≤ 0` = continu) ; `job_view` expose `step`, `paused`, `cursor`. Une pause > 1 h
+   arrête le job. La rose au point rouge montre les 32 secteurs (vert = ≥ seuil) et la baguette suit le point courant ; cliquer
+   ailleurs sonde sans bouger le modèle. Le tracé rouge est celui du mode Auto (même `auto.graph`, « Effacer le tracé » là-bas).
 
 ```bash
-python3 tools/wand.py maps/nexus_alkhemia_2011.jpg 4329 3213 --tol 32 --radius 192 --png /tmp/masque.png
+python3 tools/magic_wand.py maps/nexus_alkhemia_2011.jpg 4329 3213 --tol 32 --radius 192 --png /tmp/masque.png
 ```
 
 Observations au premier essai (trois points, voir la PR) : sur une galerie fine en double trait, le vide fait 2–3 px et la

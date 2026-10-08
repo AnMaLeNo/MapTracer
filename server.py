@@ -308,7 +308,7 @@ class H(http.server.SimpleHTTPRequestHandler):
                 grant_steps(job, int(req.get('n', 1)))
                 return self.reply(200, {'ok': True})
             if path == '/api/wand':
-                import wand as WD
+                import magic_wand as WD
                 img = get_image(req['map'])
                 tols = req.get('tols')
                 return self.reply(200, WD.wand(img, float(req['x']), float(req['y']), int(req.get('tol', 32)),

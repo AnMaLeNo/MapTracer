@@ -87,13 +87,17 @@ def shape_stats(mask, sx, sy, near=12):
     return st
 
 
-def jump(areas, tols, factor=2.5, min_area=30):
-    """Première tolérance où l'aire bondit (× factor, une fois la sélection non triviale) : la précédente est la tolérance
-    « proposée ». Heuristique à regarder, pas une décision."""
+def jump(areas, tols, factor=2.5, min_tol=8, min_area=30):
+    """Première tolérance où l'aire bondit (×factor d'un cran au suivant) APRÈS un palier : on ignore la montée initiale due au
+    bruit JPEG (tol < min_tol, aires minuscules). Retourne (dernier cran du palier, cran du bond) ou (None, None). Heuristique."""
+    stable = False
     for i in range(1, len(tols)):
-        if areas[i - 1] >= min_area and areas[i] > factor * areas[i - 1]:
+        r = areas[i] / max(areas[i - 1], 1)
+        if tols[i - 1] >= min_tol and areas[i - 1] >= min_area and r < 1.3:
+            stable = True
+        if stable and r > factor:
             return tols[i - 1], tols[i]
-    return tols[-1], None
+    return None, None
 
 
 def png_mask(mask, rgb=(0, 200, 255)):
