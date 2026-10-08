@@ -194,3 +194,100 @@ Défaut de l'app inchangé : **`v4-w128-k32`** (aucune v5 ne fait mieux sur les 
 prochaine série de zones, lancer le mode Auto avec **`v5-z6-g1`** : il contient les six corrections, ses erreurs sont
 donc de nouvelles erreurs, et ses holdouts sont les plus équilibrés des v5 (ho1 83 % / 1,1 px ; ho2 98,6 % / 15/20).
 Toujours des outils de proposition à valider.
+
+---
+
+# Campagne v6 (octobre 2026) : 14 zones, affinage contre réentraînement
+
+Dataset `v6` = deux gros projets + **tous les lots de `data/zones/`** : sud v4 (6 zones, 18 carrefours), sud2 v5 (7 zones,
+52 carrefours, tracé Auto de `v5-z6-g1`) et le nouveau **lot nord-est** `nexus_alkhemia_2011_nordest_v5-z6_2026-10-06`
+(tracé Auto de `v5-z6` depuis 2 départs, 7 570 s de suivi ; 1 zone de 678 points / 64 carrefours / 2 282 px autour du
+Val-de-Grâce, plus 1 zone d'un seul point qui ne produit aucun état). `--zone-aug 6` → **88 304 exemples** (train 78 701,
+dont ≈ 34 % tirés des zones — contre 11 % en v5 ; val 9 603, inchangée). Avant entraînement, `v5-z6-g1` ne couvrait que
+**49 %** du lot nord-est (18/65 carrefours) : c'est un style graphique absent des projets (hagues et murs en noir épais,
+galeries sinueuses entre des taches bleu clair, croisements tous les 30 px), donc un vrai lot d'exemples difficiles.
+L'audit de `v5-z6-g1` sur ce lot donne 134 anomalies pour 1 436 états (51 `branch_missed`, 67 `direction_missed`,
+14 `false_end`) — à trancher dans l'app, pas des erreurs prouvées.
+
+| modèle | entraînement | époques | livré |
+|---|---|---|---|
+| `v6-ft` | affinage de `v5-z6-g1` (`--init`, lr 1e-4) | 10 (5 min) | oui |
+| `v6-z14` | complet, graine 0 | 30 (15 min) | oui |
+| v6-z14-g1 | complet, graine 1 | 30 | non |
+| v6-z14-za3 | complet, graine 1, `--zone-aug 3` (74 510 ex., zones ≈ 22 %) | 30 | non |
+
+## Exemples isolés (validation, sans les zones)
+
+| modèle | P dir. | R dir. | F1 | cul-de-sac | rappel carrefours | erreur angulaire |
+|---|---|---|---|---|---|---|
+| v5-z6-g1 (rappel) | 0,970 | 0,960 | 0,965 | 0,711 | 0,826 | 3,34° |
+| v6-ft | 0,969 | 0,966 | 0,968 | 0,711 | **0,851** | 3,51° |
+| v6-z14 | 0,973 | 0,968 | **0,971** | 0,689 | 0,848 | 3,39° |
+| v6-z14-g1 | 0,974 | 0,964 | 0,969 | 0,733 | 0,837 | 3,37° |
+| v6-z14-za3 | 0,971 | 0,966 | 0,968 | 0,578 | 0,845 | 3,39° |
+
+Toujours ±0,3 point. Le rappel des carrefours isolés monte un peu (0,83 → 0,85) : cohérent avec des modèles devenus
+plus généreux sur les branches.
+
+## Suivi réel sur les holdouts (jamais vus), tolérance 3 px
+
+| modèle | ho1 couv. | ho1 préc. | ho1 carrefours (posés) | écart | trop | ho2 couv. | ho2 préc. | ho2 carrefours (posés) | écart | trop |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v4-w128-k32 (rappel) | 96,8 | **94,2** | 13/15 | 1,4 | **62** | 97,1 | 60,6 | 15/20 | 3,3 | 1 363 |
+| v5-z6-g1 | 96,3 | 82,7 | 13/15 (16) | 1,1 | 270 | **98,6** | **63,3** | 15/20 (35) | 2,7 | **1 230** |
+| **v6-ft** | 97,2 | 81,8 | 14/15 (16) | 1,8 | 293 | **98,6** | 61,6 | **17/20** (41) | **2,1** | 1 314 |
+| v6-z14 | **98,0** | 68,0 | 14/15 (21) | **1,0** | 650 | 96,9 | 56,6 | 16/20 (40) | 3,6 | 1 597 |
+| v6-z14-g1 | 97,8 | 56,8 | 13/15 (23) | 1,9 | 1 042 | 98,4 | 59,3 | 16/20 (47) | 2,0 | 1 428 |
+| v6-z14-za3 | 97,9 | 69,8 | 14/15 (20) | 1,4 | 587 | **98,6** | **64,0** | **18/20** (43) | 3,1 | 1 225 |
+
+## Suivi relancé sur les zones apprises (apprentissage, pas généralisation)
+
+Lot nord-est (`--zone 1 --zone-margin 10 --seed auto --reseed 3`) et lot sud2 zone par zone (marge 10) — couverture de
+l'annotation / carrefours retrouvés sur annotés (posés) :
+
+| zone | v5-z6-g1 | v6-ft | v6-z14 | v6-z14-g1 | v6-z14-za3 |
+|---|---|---|---|---|---|
+| **nord-est** (65) | 49 %, 18/65 (23) | 90 %, 56/65 (134) | **95 %, 60/65** (190) | 92 %, 56/65 (161) | 93 %, **61/65** (155) |
+| sud2 z0 (24) | 91 %, 23/24 | 96 %, 23/24 | 98 %, 23/24 | 98 %, 23/24 | 99 %, 23/24 |
+| sud2 z1 (4) | 100 %, 4/4 | 98 %, 4/4 | 98 %, 4/4 | 98 %, 4/4 | 98 %, 4/4 |
+| sud2 z3 (11) | 71 %, 5/11 | **98 %, 10/11** | 94 %, 10/11 | 95 %, 10/11 | **52 %, 1/11** |
+| sud2 z4 (9) | 63 %, 3/9 | 98 %, 8/9 | 97 %, **9/9** | 66 %, 8/9 | 95 %, 7/9 |
+| sud2 z6 (3) | 67 %, 3/3 | 100 %, 3/3 | 100 %, 3/3 | 100 %, 3/3 | 68 %, 3/3 |
+
+(z2 et z5 : zones de 60 px, inévaluables à marge 10 — le traceur en sort avant de confirmer une branche, pour tous les
+modèles ; voir campagne v5, point 3.)
+
+## Ce qu'on peut conclure
+
+1. **Le lot nord-est est appris** par les quatre v6 (49 → 90–95 % de couverture, 18 → 56–60/65 carrefours), et les zones
+   sud2 que v5-z6-g1 n'avait apprises qu'à moitié (z3 : 5/11, z4 : 3/9) le sont maintenant (10/11, 8–9/9) — l'ajout de
+   données a aussi consolidé les anciennes zones.
+2. **Les holdouts : un carrefour de plus en ho1 (14/15) et un ou deux en ho2 (16–17/20) pour tous les v6**, à comparer
+   à 13–15 et 14–16 sur les six modèles précédents. C'est la première campagne où les quatre variantes sont au-dessus de
+   la médiane v4/v5 sur les carrefours des deux holdouts ; c'est petit, dans l'ordre du bruit de graine, mais cohérent.
+3. **Réentraîner avec un tiers de zones denses coûte la précision.** `v6-z14` et sa graine 1 tombent à 68 % et 57 % en
+   ho1 (650 et 1 042 px de trop : escaliers de l'IGC, avenue du parc Montsouris prolongée) et posent 21–23 carrefours
+   pour 15. Deux graines concordantes, et la même tendance en ho2 (40–47 carrefours posés pour 20) : ce n'est pas du bruit,
+   le modèle a appris sur le nord-est que presque chaque trait est une galerie et chaque croisement un carrefour.
+   Réduire le poids des zones (`v6-z14-za3`, `--zone-aug 3`) ne règle rien en ho1 (70 %, 587 px de trop — trois
+   réentraînements complets, trois fois le même défaut) ; il a le meilleur ho2 de la campagne (64 %, 18/20, graine unique,
+   donc non concluant) mais **oublie la zone sud2 z3** (52 % de couverture, 1/11 carrefours, contre 10/11 pour les trois
+   autres v6) : avec 3 répétitions les petites zones ne pèsent plus assez.
+   **L'affinage court (`v6-ft`) n'a pas ce défaut** : précision ho1 82 % (= v5-z6-g1), 16 carrefours posés pour 15, et il
+   apprend quand même les zones (90 % du nord-est). C'est la voie annoncée en v5 (« à retenir quand les zones
+   s'accumuleront, avec ho2 sous surveillance ») — ho2 ne recule pas (17/20).
+4. **Limite de la mesure sur le nord-est** : les v6 y posent 134–190 carrefours pour 65 annotés et la précision y est de
+   44–50 %. Une partie est du bruit du modèle ; une partie est de l'annotation incomplète (le dessin y est plein de départs
+   de galeries non tracés). Compléter l'annotation de ce secteur (ou poser des exemples « ici ce n'est pas une galerie »)
+   est ce qui ferait le plus progresser la précision des prochains modèles.
+5. **Non testé** : l'autonomie sur une zone jamais vue de même style que le nord-est (il n'en existe pas d'annotée) ; le
+   mode assisté avec les v6 dans l'app ; d'autres graines d'affinage (une seule graine `v6-ft`).
+
+## Recommandation
+
+**`v6-ft`** devient le modèle à utiliser dans l'app (mode assisté et mode Auto) : seul v6 qui garde la précision de
+`v5-z6-g1` sur les holdouts, un ou deux carrefours de plus, et il contient les 14 corrections — ses erreurs seront de
+nouvelles erreurs. `v6-z14` est livré comme variante exploratrice (couvre plus, se trompe plus) pour les zones denses où
+`v6-ft` s'arrête. Pour les prochaines zones : affinage depuis `v6-ft` (`--init models/v6-ft/model.pt --epochs 10 --lr 1e-4`,
+5 min) plutôt qu'un réentraînement complet, tant que les zones denses pèsent autant dans le train. Toujours des outils de
+proposition à valider.
