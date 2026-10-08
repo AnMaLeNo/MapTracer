@@ -58,3 +58,7 @@ body[data-mode=auto] .mode-trace{display:none} body[data-mode=trace] .mode-auto{
 .list.audit .acts{margin-left:auto;display:flex;gap:3px}
 .list.audit .acts button{font-size:10px;padding:1px 6px}
 button.small{font-size:11px;padding:3px 8px}
+
+.inline{display:flex;align-items:center;gap:6px;flex-wrap:wrap} .inline label{font-size:12px;display:flex;align-items:center;gap:4px} .inline input[type=number]{width:52px}
+label.row input[type=range]{flex:1;min-width:80px} label.row select{width:auto}
+#wandCurve{display:block;width:100%;height:90px;background:#0f1216;border:1px solid var(--line);border-radius:6px;margin:6px 0}

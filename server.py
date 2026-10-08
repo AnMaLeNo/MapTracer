@@ -108,9 +108,23 @@ def get_image(rel):
     return STATE['images'][path]
 
 
+STEP_IDLE_S = 3600
+
+
+def grant_steps(job, n):
+    """Pas à pas : accorde n pas (n ≤ 0 = reprise en continu)."""
+    with job['cv']:
+        if n <= 0:
+            job['step'] = False; job['grant'] = 1
+        else:
+            job['grant'] += n
+        job['cv'].notify_all()
+
+
 def job_view(job):
     return {k: job[k] for k in ('id', 'status', 'model', 'steps', 'branches', 'queue', 'error', 'seed', 'reasons', 'graph')} | \
-           {'elapsed_s': round((job.get('t_end') or time.time()) - job['t0'], 1)}
+           {'elapsed_s': round((job.get('t_end') or time.time()) - job['t0'], 1),
+            'step': job.get('step', False), 'paused': job.get('paused', False), 'cursor': job.get('cursor')}
 
 
 def start_trace(req):
@@ -124,7 +138,9 @@ def start_trace(req):
     STATE['job_seq'] += 1
     job = {'id': STATE['job_seq'], 'status': 'running', 'model': name, 'steps': 0, 'branches': 0, 'queue': 0, 'error': None,
            'seed': [x, y], 'reasons': {}, 'graph': req.get('graph') or {'nodes': [], 'edges': []}, 'stop': False,
-           't0': time.time(), 't_snap': 0.0, 't_end': None}
+           't0': time.time(), 't_snap': 0.0, 't_end': None,
+           # pas à pas : le fil de suivi s'arrête après chaque prédiction tant que `grant` (pas accordés via /step) est nul
+           'step': bool(req.get('step')), 'grant': 0, 'paused': False, 'cursor': None, 'cv': threading.Condition()}
     for old in sorted(STATE['jobs'])[:-MAX_JOBS + 1]:
         if STATE['jobs'][old]['status'] != 'running':
             del STATE['jobs'][old]
@@ -134,6 +150,7 @@ def start_trace(req):
 
     def snapshot(tr):
         job['graph'] = tr.out.to_dict(); job['steps'] = tr.steps; job['branches'] = len(tr.branches); job['queue'] = len(tr.queue)
+        job['cursor'] = tr.cursor
         job['reasons'] = {}
         for b in tr.branches:
             job['reasons'][b['reason']] = job['reasons'].get(b['reason'], 0) + 1
@@ -141,6 +158,20 @@ def start_trace(req):
     def hook(tr):
         if job['stop']:
             raise T.StopTrace()
+        if job['step']:
+            snapshot(tr); job['t_snap'] = time.time()
+            with job['cv']:
+                t_wait = time.time()
+                while job['grant'] <= 0 and not job['stop'] and job['step']:
+                    job['paused'] = True
+                    job['cv'].wait(0.5)
+                    if time.time() - t_wait > STEP_IDLE_S:       # pas à pas abandonné : on libère le fil
+                        job['stop'] = True
+                job['paused'] = False
+                job['grant'] -= 1
+            if job['stop']:
+                raise T.StopTrace()
+            return
         if time.time() - job['t_snap'] > 0.5:
             snapshot(tr); job['t_snap'] = time.time()
 
@@ -268,6 +299,22 @@ class H(http.server.SimpleHTTPRequestHandler):
                     return self.reply(200, audit_view(start_audit(req)))
                 except RuntimeError as e:
                     return self.reply(503, {'error': str(e)})
+            if path.startswith('/api/trace/') and path.endswith('/step'):
+                job = STATE['jobs'].get(int(path.split('/')[3]))
+                if not job:
+                    return self.reply(404, {'error': 'tâche inconnue'})
+                if job['status'] != 'running':
+                    return self.reply(409, {'error': 'suivi terminé'})
+                grant_steps(job, int(req.get('n', 1)))
+                return self.reply(200, {'ok': True})
+            if path == '/api/wand':
+                import wand as WD
+                img = get_image(req['map'])
+                tols = req.get('tols')
+                return self.reply(200, WD.wand(img, float(req['x']), float(req['y']), int(req.get('tol', 32)),
+                                               radius=max(32, min(512, int(req.get('radius', 192)))),
+                                               tols=[int(t) for t in tols] if tols else None, sweep=bool(req.get('sweep', True)),
+                                               near=int(req.get('near', 12))))
             if (path.startswith('/api/trace/') or path.startswith('/api/audit/')) and path.endswith('/stop'):
                 job = STATE['jobs'].get(int(path.split('/')[3]))
                 if not job:

@@ -72,6 +72,28 @@
   </section>
 
   <section class="mode-auto">
+    <h2>Pas à pas + baguette magique <span class="pill">preuve de concept</span></h2>
+    <p class="muted small">Le modèle avance d'un pas à la fois ; à chaque point, un remplissage flou (tolérance de couleur, comme la baguette magique de Photoshop) part du point courant et montre le « vide » de galerie qu'il sélectionne. Montez la tolérance jusqu'à ce que la sélection déborde.</p>
+    <div class="btns">
+      <button id="btnStepSeed" title="Puis cliquez sur la carte">Départ pas à pas : cliquer sur la carte</button>
+      <div class="inline">
+        <button id="btnStepNext" disabled title="N">Pas suivant <kbd>N</kbd></button>
+        <label>× <input type="number" id="stepN" min="1" max="500" value="1"></label>
+        <button id="btnStepRun" disabled title="Reprendre le suivi normal jusqu'au bout">Continuer en continu</button>
+      </div>
+    </div>
+    <div id="stepInfo" class="muted small"></div>
+    <label class="row"><input type="checkbox" id="wandFollow" checked> Baguette magique au point courant (pas à pas, ou point d'annotation sélectionné)</label>
+    <div class="btns">
+      <button id="btnWandProbe" title="W">Sonder un point : cliquer sur la carte <kbd>W</kbd></button>
+    </div>
+    <label class="row">Tolérance <input type="range" id="wandTol" min="0" max="128" step="1" value="32"><b id="wandTolVal">32</b> <button id="btnWandProposed" class="small" title="Juste avant le premier bond d'aire du balayage">proposée</button></label>
+    <label class="row">Rayon de recherche <select id="wandRadius"><option>128</option><option selected>192</option><option>256</option><option>384</option><option>512</option></select> px</label>
+    <canvas id="wandCurve" width="280" height="90" title="aire sélectionnée (log) et largeur estimée selon la tolérance ; trait = tolérance courante, pointillé = bond"></canvas>
+    <div id="wandInfo" class="muted small"></div>
+  </section>
+
+  <section class="mode-auto">
     <h2>Zones corrigées <span id="zoneCount" class="pill">0</span></h2>
     <p class="muted small">Cliquez n'importe où sur la carte pour poser un point là où le modèle se trompe ; chaque groupe de points reliés forme une zone (son rectangle est calculé autour des points).</p>
     <ol id="zones" class="list"></ol>
@@ -139,6 +161,7 @@
       <li>Repérez une erreur et annotez par-dessus le tracé rouge comme en mode manuel, sans rien découper : clic dans le vide = premier point d'un nouveau groupe, clic = point suivant (relié au précédent), <b>clic droit</b> = carrefour, <kbd>F</kbd> = cul-de-sac, <kbd>Échap</kbd> = finir la branche puis clic sur un point pour repartir de là. Chaque groupe de points reliés est une « zone » ; son rectangle (points ± 32 px) sert au rapport et à l'entraînement.</li>
       <li>Quelques points suffisent (un carrefour + 30–40 px par branche) ; une extrémité non marquée <kbd>F</kbd> est <b>ouverte</b> (anneau pointillé) et jamais apprise comme cul-de-sac — mais un vrai cul-de-sac oublié n'est pas appris non plus : pensez à <kbd>F</kbd>.</li>
       <li>Retouches : glisser un point = déplacer · clic sur un segment = y insérer un point · <kbd>Ctrl</kbd>+clic sur un autre point = relier / délier (deux groupes reliés fusionnent) · <kbd>Suppr</kbd> · <kbd>I</kbd> = type · <kbd>Ctrl+Z</kbd>.</li>
+      <li><b>Pas à pas + baguette magique</b> (preuve de concept) : « Départ pas à pas » puis <kbd>N</kbd> fait avancer le modèle d'un pas ; la rose au point courant montre les 32 directions et leur confiance. La baguette (<kbd>W</kbd> pour sonder un point quelconque, <kbd>[</kbd> / <kbd>]</kbd> pour la tolérance) colore le vide de galerie connecté au point dans la tolérance de couleur choisie ; le point jaune est le centre suggéré (pixel le plus loin des murs près du point). La courbe aire(tolérance) montre où la sélection déborde. Rien n'est enregistré : c'est pour regarder.</li>
       <li>Annotez <b>toutes</b> les galeries autour d'un carrefour corrigé (une galerie oubliée = une direction fausse apprise) ; plusieurs départs du modèle et autant de groupes que vous voulez vont dans le même export. Le fichier garde la provenance (mode, modèle, version de l'app, départs, tracé complet du modèle) pour qui entraîne.</li>
     </ul>
   </section>
@@ -162,6 +185,7 @@
   <div id="drop">Déposez une image de carte ici</div>
 </main>
 <script src="app.js"></script>
+<script src="wand.js"></script>
 <script src="auto.js"></script>
 <script src="audit.js"></script>
 </body>
