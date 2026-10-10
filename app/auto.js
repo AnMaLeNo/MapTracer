@@ -307,7 +307,7 @@ const Auto = {
     dirty = true;
   },
   hover(mx, my) {
-    if (mode === 'wand') return;
+    if (mode === 'wand') { dirty = true; return; }   // la vue a pu bouger (molette, glisser) : redessiner
     A.hover = { x: mx, y: my }; A.hNode = null; A.hEdge = null; A.hZone = null;
     const n = findNode(mx, my);
     if (n) { A.hNode = n.id; A.hZone = n.zi; }
