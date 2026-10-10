@@ -3,15 +3,16 @@
    Entrée lance le modèle depuis le point sondé, N le fait avancer d'un pas (auto.js : startTrace(step) / stepTrace) ; la
    baguette suit alors le point courant du modèle. Rien n'est enregistré ni transmis au modèle. */
 const Wand = {
-  target: null, res: null, sweep: null, sweepKey: null, proposed: null, jump: null, mask: null, tinted: null, tintKey: '',
-  tol: +(localStorage.getItem('mt-wand-tol') || 32), auto: localStorage.getItem('mt-wand-auto') !== '0',
+  target: null, res: null, sweep: null, sweepKey: null, proposed: null, jump: null, stop: null, plugs: [], mask: null, tinted: null, tintKey: '',
+  tol: +(localStorage.getItem('mt-wand-tol') || 32), auto: localStorage.getItem('mt-wand-auto') !== '0', plug: localStorage.getItem('mt-wand-plug') !== '0',
   busy: false, queued: null, timer: null, error: null,
   radius() { return +$('wandRadius').value || 192; },
   alpha() { return (+$('wandAlpha').value || 60) / 100; },
   color() { return $('wandColor').value || '0,200,255'; },
   stepping() { return auto.job && auto.job.status === 'running' && auto.job.step; },
   init() {
-    $('wandTol').value = this.tol; $('wandTolVal').textContent = this.tol; $('wandAuto').checked = this.auto;
+    $('wandTol').value = this.tol; $('wandTolVal').textContent = this.tol; $('wandAuto').checked = this.auto; $('wandPlug').checked = this.plug;
+    $('wandPlug').addEventListener('change', () => { this.plug = $('wandPlug').checked; localStorage.setItem('mt-wand-plug', this.plug ? '1' : '0'); this.sweepKey = null; this.request(true); });
     $('wandTol').addEventListener('input', () => { this.setTol(+$('wandTol').value, true, true); });
     $('wandAuto').addEventListener('change', () => { this.auto = $('wandAuto').checked; localStorage.setItem('mt-wand-auto', this.auto ? '1' : '0'); if (this.auto && this.proposed != null) this.setTol(this.proposed); this.ui(); });
     $('wandRadius').addEventListener('change', () => { this.sweepKey = null; this.request(true); });
@@ -36,7 +37,7 @@ const Wand = {
     if (this.target && this.target.x === x && this.target.y === y) return;
     this.target = { x, y, src }; this.request(true); dirty = true; this.ui();
   },
-  clear() { this.target = null; this.res = null; this.mask = null; this.tinted = null; this.sweep = null; this.sweepKey = null; this.proposed = null; this.jump = null; dirty = true; this.ui(); },
+  clear() { this.target = null; this.res = null; this.mask = null; this.tinted = null; this.sweep = null; this.sweepKey = null; this.proposed = null; this.jump = null; this.stop = null; this.plugs = []; dirty = true; this.ui(); },
   start() {
     if (!this.target) return warn('Cliquez d’abord un point sur une galerie.');
     if (this.stepping()) return warn('Un pas à pas est déjà en cours (« Arrêter le modèle » d’abord).');
@@ -62,16 +63,16 @@ const Wand = {
     const url = mapUrl(); if (!url) { this.error = 'Carte locale : le serveur ne la connaît pas (choisissez-la dans la liste).'; this.ui(); return; }
     if (this.busy) { this.queued = this.queued || sweep; return; }
     this.busy = true; this.ui();
-    const { x, y } = this.target, radius = this.radius(), key = `${x},${y},${radius}`;
+    const { x, y } = this.target, radius = this.radius(), plug = this.plug, key = `${x},${y},${radius},${plug}`;
     sweep = sweep || key !== this.sweepKey;
     try {
       const r = await fetch('../api/wand', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                             body: JSON.stringify({ map: url, x, y, tol: this.tol, radius, sweep }) });
+                                             body: JSON.stringify({ map: url, x, y, tol: this.tol, radius, sweep, plug }) });
       const res = await r.json();
       if (!r.ok) this.error = res.error || String(r.status);
       else {
         this.error = null;
-        if (res.sweep) { this.sweep = res.sweep; this.proposed = res.proposed; this.jump = res.jump; this.sweepKey = key; }
+        if (res.sweep) { this.sweep = res.sweep; this.proposed = res.proposed; this.jump = res.jump; this.stop = res.stop || null; this.plugs = res.plugs || []; this.sweepKey = key; }
         if (sweep && this.auto && res.proposed != null && res.proposed !== this.tol) {   // tolérance automatique : on recalcule au cran proposé
           this.tol = res.proposed; $('wandTol').value = this.tol; $('wandTolVal').textContent = this.tol; localStorage.setItem('mt-wand-tol', this.tol);
           this.queued = false;
@@ -111,6 +112,15 @@ const Wand = {
         ctx.globalAlpha = this.alpha();
         ctx.drawImage(im, sx, sy, ex - sx, ey - sy);
         ctx.globalAlpha = 1;
+      }
+      const px = Math.max(3, view.s);                                      // bouchons : chaque pixel de goulot interdit, en rouge
+      for (const p of this.plugs) {
+        if (p.tol > this.tol) continue;
+        ctx.fillStyle = '#ff2a2a';
+        for (const [qx, qy] of p.pixels) { const [ax, ay] = toScreen(qx + 0.5, qy + 0.5); ctx.fillRect(ax - px / 2, ay - px / 2, px, px); }
+        const [lx, ly] = toScreen(p.x + 0.5, p.y + 0.5);
+        ctx.strokeStyle = '#ff2a2a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(lx, ly, px + 5, 0, 7); ctx.stroke();
+        if (view.s >= 2) { ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; const txt = `fuite bouchée à ${p.tol} (${p.area} px² évités)`; ctx.strokeText(txt, lx + px + 8, ly + 4); ctx.fillText(txt, lx + px + 8, ly + 4); }
       }
       const st = res.stats || {};
       if (st.center) {
@@ -157,10 +167,12 @@ const Wand = {
     g.strokeStyle = `rgb(${this.color()})`; g.lineWidth = 2; g.beginPath();
     sw.forEach((r, i) => { const x = X(r.tol), y = YA(r.area); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
     for (const r of sw) if (r.border) { g.fillStyle = '#ff4d4d'; g.beginPath(); g.arc(X(r.tol), YA(r.area), 2.5, 0, 7); g.fill(); }
-    if (this.jump != null) { g.strokeStyle = 'rgba(255,77,77,.8)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(X(this.jump), 14); g.lineTo(X(this.jump), Hc - 16); g.stroke(); g.setLineDash([]); }
+    for (const r of sw) if (r.plugs) { g.fillStyle = '#ff2a2a'; g.beginPath(); g.moveTo(X(r.tol) - 4, Hc - 16); g.lineTo(X(r.tol) + 4, Hc - 16); g.lineTo(X(r.tol), Hc - 22); g.fill(); }
+    if (this.jump != null) { g.strokeStyle = 'rgba(255,77,77,.8)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(X(this.jump), 14); g.lineTo(X(this.jump), Hc - 16); g.stroke(); g.setLineDash([]);
+      g.fillStyle = '#ff7b7b'; g.fillText(this.stop && this.stop.reason === 'porous' ? 'mur poreux' : 'débordement', Math.min(X(this.jump) + 3, Wc - 70), 16); }
     g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(X(this.tol), 14); g.lineTo(X(this.tol), Hc - 16); g.stroke();
     g.fillStyle = '#8d97a5';
-    g.fillText(`aire sélectionnée (log, max ${maxA} px²) · pointillé jaune : largeur (max ${maxW} px) · rouge : touche le bord · blanc : tolérance courante`, 8, 2);
+    g.fillText(`aire (log, max ${maxA} px²) · jaune : largeur (max ${maxW} px) · point rouge : touche le bord · ▲ : fuite bouchée · blanc : tolérance courante`, 8, 2);
   },
   verdict(st) {
     if (!st || !st.area) return ['warn', 'Rien de sélectionné : le point est sur un trait, ou la tolérance est trop basse (montez-la, ou cliquez bien dans le blanc).'];
@@ -186,7 +198,8 @@ const Wand = {
     if (!t) { v.textContent = ''; v.className = 'verdict'; }
     else if (this.error) { v.textContent = 'Erreur : ' + this.error; v.className = 'verdict warn'; }
     else if (this.busy && !res) { v.textContent = 'Calcul…'; v.className = 'verdict'; }
-    else if (res) { const [cls, txt] = this.verdict(res.stats); v.innerHTML = `<b>Lecture (heuristique)</b> — ${txt}`; v.className = 'verdict ' + cls; }
+    else if (res) { const [cls, txt] = this.verdict(res.stats), np = this.plugs.filter(p => p.tol <= this.tol).length;
+      v.innerHTML = `<b>Lecture (heuristique)</b> — ${txt}${np ? ` <b>${np} fuite(s) bouchée(s)</b> (carrés rouges) : sans bouchon la sélection aurait inondé ${this.plugs.filter(p => p.tol <= this.tol).reduce((a, p) => a + p.area, 0)} px² de plus.` : ''}`; v.className = 'verdict ' + cls; }
     let s = '';
     if (t) {
       s = `Point <b>${t.x}, ${t.y}</b> (${t.src})${this.busy ? ' · calcul…' : ''}`;
@@ -196,7 +209,14 @@ const Wand = {
           `<br>Au point : mur le plus proche à ${st.half_width_at_seed} px ; centre suggéré (jaune) à ${Math.round(Math.hypot(dx, dy))} px (${dx >= 0 ? '+' : ''}${dx}, ${dy >= 0 ? '+' : ''}${dy}), rayon libre ${st.center ? st.center[2] : '?'} px.`;
         s += `<br>Couleur de référence ${res.ref.join(',')}` + (res.seed_px.join() !== res.ref.join() ? ` (pixel cliqué ${res.seed_px.join(',')} : sur un trait, ton clair du voisinage pris)` : '') +
           (res.seed_used && (res.seed_used[0] !== t.x || res.seed_used[1] !== t.y) ? ` · départ déplacé en ${res.seed_used.join(', ')}` : '');
-        if (this.sweep) s += `<br>Balayage 0…128 : ${this.jump != null ? `bond d'aire entre ${this.proposed} et ${this.jump}` : 'aucun bond net'} (heuristique : ×2,5 d'un cran au suivant).`;
+        if (this.sweep) {
+          const st2 = this.stop;
+          s += `<br>Balayage 0…128 : ` + (!st2 ? 'aucun débordement net (salle, ou pas de palier avant le bond)'
+            : st2.reason === 'porous' ? `<b>mur poreux à ${st2.tol}</b> : ${st2.plugged_px} px de goulots à boucher d'un coup, ${st2.plugged_area} px² derrière — le trait entier devient transparent, on propose ${st2.before}`
+            : `<b>débordement à ${st2.tol}</b> : aire ×${st2.ratio}${st2.width_ratio >= 1.5 ? `, largeur ×${st2.width_ratio}` : ''}${st2.window_frac >= 0.25 ? `, ${Math.round(st2.window_frac * 100)} % de la fenêtre` : ''} sans goulot à boucher — on propose ${st2.before}`) + '.';
+          if (this.plugs.length) s += `<br>Fuites bouchées : ` + this.plugs.map(p => `<span title="goulot ${p.neck} px (${p.contact} px de contact), zone ${p.width} px de large vs galerie ${p.width_prev}">tol ${p.tol} → ${p.area} px²</span>`).join(' · ') + ` <span class="muted">(règle : zone entrée par un goulot ≤ 3 px et ≥ 2,5× plus large que la sélection ; survolez pour le détail)</span>`;
+          else if (this.plug) s += `<br>Aucune fuite bouchée (aucune zone entrée par un goulot ≤ 3 px).`;
+        }
       }
     }
     el.innerHTML = s;

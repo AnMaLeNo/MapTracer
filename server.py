@@ -314,7 +314,7 @@ class H(http.server.SimpleHTTPRequestHandler):
                 return self.reply(200, WD.wand(img, float(req['x']), float(req['y']), int(req.get('tol', 32)),
                                                radius=max(32, min(512, int(req.get('radius', 192)))),
                                                tols=[int(t) for t in tols] if tols else None, sweep=bool(req.get('sweep', True)),
-                                               near=int(req.get('near', 12))))
+                                               near=int(req.get('near', 12)), plug=bool(req.get('plug', True))))
             if (path.startswith('/api/trace/') or path.startswith('/api/audit/')) and path.endswith('/stop'):
                 job = STATE['jobs'].get(int(path.split('/')[3]))
                 if not job:

@@ -149,9 +149,18 @@ Rien n'est enregistré ni transmis au modèle.
    jaune, avec son rayon libre), **lecture heuristique** (galerie fine / galerie / salle / débordement, d'après largeur ≈
    2·aire/périmètre, allongement par ACP, remplissage, contact avec le bord), détails chiffrés, et la **courbe aire(tolérance)**
    pour 0…128 par 4 (log ; pointillé jaune = largeur ; rouge = touche le bord).
-2. **Tolérance** au curseur ou `[` `]`. En « automatique » (défaut), elle se cale sur le cran avant le premier bond d'aire ×2,5 du
-   balayage — heuristique : sur une salle ou une galerie large le bond arrive dès 4–8, sur une galerie fine bouchée par le JPEG il
-   faut souvent ≥ 36. Toucher le curseur désactive l'automatique.
+2. **Tolérance** au curseur ou `[` `]`. Le balayage 0…128 est **incrémental avec bouchage des fuites** (`sweep()` /
+   `leaks()`) : à chaque cran, chaque zone nouvelle (4-connexe) est examinée avec ses pixels de contact à l'ancienne sélection ;
+   si elle entre par un **goulot ≤ 3 px** (plus grand contact connexe) et qu'elle est **≥ 2,5× plus large** que la sélection
+   suivie, c'est une fuite — un pixel clair dans le trait par lequel « l'eau » s'engouffre et inonde — et ses pixels d'entrée
+   sont interdits pour ce cran et tous les suivants (carrés rouges dans l'app, ▲ sur la courbe). Une vraie branche garde une
+   largeur comparable (fine ou pas) et n'est pas bouchée ; une salle qui s'ouvre largement n'a pas de goulot. Case « Boucher
+   les fuites » à décocher pour comparer au remplissage brut. En « automatique » (défaut), la tolérance se cale sur le cran
+   avant l'arrêt proposé : **débordement** (après un palier, aire ×2,5 *et* largeur ×1,5 ou ≥ ¼ de la fenêtre — une galerie
+   fine qui « file » bondit en aire sans s'élargir et n'est pas un débordement) ou **mur poreux** (≥ 8 px de goulots nourrissant
+   ≥ 2× l'aire courante à boucher d'un coup : il n'y a plus de mur). Toucher le curseur désactive l'automatique. Tout est
+   heuristique et visible dans l'app (lecture, détail de chaque bouchon au survol).
+
 3. **Entrée** lance la boucle de suivi normale (`tools/trace.py`, même modèle, mêmes règles de branches) depuis le point cliqué en
    pas à pas ; **N** = un pas ; « Continuer en continu » reprend le suivi normal. Côté serveur : `POST /api/trace {step: true}`,
    le `hook` (appelé après la prédiction, `tr.cursor = {node, x, y, heading, probs}`) bloque sur une `threading.Condition`
@@ -161,7 +170,16 @@ Rien n'est enregistré ni transmis au modèle.
 
 ```bash
 python3 tools/magic_wand.py maps/nexus_alkhemia_2011.jpg 4329 3213 --tol 32 --radius 192 --png /tmp/masque.png
+# rejouer un exemple (coordonnées du clic) : courbe cran par cran + planche fenêtre / tol / proposée / débordement
+python3 tools/magic_wand.py maps/nexus_alkhemia_2011.jpg 3572 5691 --tol 64 --steps --report /tmp/planche.png
 ```
+
+Exemple `3572, 5691` (galerie sous le « réseau RATP ») : sans bouchage, à la tolérance 60 l'eau passe par un goulot de 3 px
+(trait gris ~200 devenu acceptable) et inonde 39 606 px² ; à 64 par 2 autres goulots d'1 px. Avec bouchage, la sélection suit
+la galerie et ses branches jusqu'à 68 (10 905 px²) ; à 72 le trait entier devient transparent (contacts larges, plus rien à
+boucher) et c'est le débordement. Sur quatre points testés le bouchage ne retire jamais une vraie branche (la salle Page, 2 px
+de large, reste) ; il laisse passer les zones hachurées qui s'ouvrent par une bouche large, et ne peut rien pour les salles
+(Cabi-bis : pas de goulot, c'est le bond d'aire ×5 à 60 qui arrête).
 
 Observations au premier essai (trois points, voir la PR) : sur une galerie fine en double trait, le vide fait 2–3 px et la
 sélection reste minuscule jusqu'à ~36 puis file le long de la galerie (c'est le « bon » débordement : largeur estimée stable) ;
