@@ -25,12 +25,50 @@
     <div class="seg" id="modeSeg">
       <button data-mode="trace" class="active">Tracer (manuel / assisté)</button>
       <button data-mode="auto">Auto : le modèle trace, je corrige</button>
+      <button data-mode="wand">Baguette magique (PoC)</button>
     </div>
     <label class="row">Modèle <select id="modelSelect"><option value="">(aucun)</option></select></label>
     <div id="assistInfo" class="muted small"></div>
   </section>
 
-  <section>
+  <section class="mode-wand">
+    <h2>Baguette magique — preuve de concept</h2>
+    <div id="wandGuide" class="guide"></div>
+    <div class="legend">
+      <span><i style="background:rgba(0,200,255,.7)"></i> sélection de la baguette</span>
+      <span><i style="background:#ffd166"></i> centre suggéré</span>
+      <span><i style="background:#ff2a2a;border-radius:0"></i> fuite bouchée (goulot d'1–3 px que l'eau franchissait)</span>
+      <span><i style="background:#39c47c"></i> direction retenue par le modèle</span>
+      <span><i style="background:#ff4d4d"></i> tracé / point courant du modèle</span>
+    </div>
+    <p class="muted small">La couleur n'est qu'une aide visuelle : rien n'est transmis au modèle ni enregistré.</p>
+  </section>
+  <section class="mode-wand">
+    <h2>1 · Baguette au point cliqué</h2>
+    <label class="row">Tolérance <input type="range" id="wandTol" min="0" max="128" step="1" value="32"><b id="wandTolVal">32</b></label>
+    <label class="row"><input type="checkbox" id="wandAuto" checked> Tolérance automatique : le cran avant le débordement ou le mur poreux <span id="wandProposed" class="pill"></span></label>
+    <label class="row"><input type="checkbox" id="wandPlug" checked title="À chaque cran, une zone nouvelle qui entre par un goulot de 1 à 3 px et qui est bien plus large que la galerie suivie est une fuite : ses pixels d'entrée sont bouchés pour ce cran et les suivants"> Boucher les fuites (carrés rouges) — décochez pour voir le remplissage brut</label>
+    <label class="row">Opacité <input type="range" id="wandAlpha" min="15" max="95" step="5" value="60"> Couleur <select id="wandColor"><option value="0,200,255">cyan</option><option value="255,0,200">magenta</option><option value="80,255,80">vert</option><option value="255,160,0">orange</option></select></label>
+    <label class="row">Rayon de recherche <select id="wandRadius"><option>128</option><option selected>192</option><option>256</option><option>384</option><option>512</option></select> px</label>
+    <div id="wandVerdict" class="verdict"></div>
+    <canvas id="wandCurve" width="300" height="110"></canvas>
+    <div id="wandInfo" class="muted small"></div>
+  </section>
+  <section class="mode-wand">
+    <h2>2 · Le modèle avance pas à pas</h2>
+    <div class="btns">
+      <button id="btnWandStart" disabled title="Entrée">Lancer le modèle depuis ce point <kbd>Entrée</kbd></button>
+      <div class="inline">
+        <button id="btnStepNext" disabled title="N">Pas suivant <kbd>N</kbd></button>
+        <label>× <input type="number" id="stepN" min="1" max="500" value="1"></label>
+        <button id="btnStepRun" disabled title="Reprendre le suivi normal jusqu'au bout">Continuer en continu</button>
+      </div>
+      <button id="btnWandStop" disabled>Arrêter le modèle</button>
+    </div>
+    <div id="stepInfo" class="muted small"></div>
+  </section>
+
+  <section class="not-wand">
     <h2>Anomalies <span id="auditCount" class="pill">0</span></h2>
     <div class="btns">
       <button id="btnAudit" title="Le modèle choisi rejoue chaque point annoté et liste ses désaccords">Vérifier mes annotations avec le modèle</button>
@@ -143,6 +181,14 @@
     </ul>
   </section>
 
+  <section class="help mode-wand">
+    <h2>Mode Baguette magique</h2>
+    <ol>
+      <li><b>Cliquez</b> dans le blanc d'une galerie : la baguette colore tout le vide relié à ce point dont la couleur reste dans la tolérance (comme la baguette de Photoshop ; un trait noir l'arrête). Zoomez (molette) sur une galerie fine : le vide n'y fait que 2–3 px.</li>
+      <li>La <b>tolérance</b> se règle au curseur ou avec <kbd>[</kbd> / <kbd>]</kbd>. En automatique, elle se cale juste avant le « bond » de la courbe aire(tolérance) — c'est une heuristique, regardez la courbe.</li>
+      <li><kbd>Entrée</kbd> lance le modèle depuis le point cliqué ; <kbd>N</kbd> le fait avancer d'un pas. La rose au point rouge montre ses 32 directions (vert = retenue) et la baguette suit le point courant. Cliquez ailleurs pour sonder un autre endroit ; <kbd>Échap</kbd> efface la sonde.</li>
+    </ol>
+  </section>
   <section class="help mode-trace">
     <h2>Règles</h2>
     <ul>
@@ -162,6 +208,7 @@
   <div id="drop">Déposez une image de carte ici</div>
 </main>
 <script src="app.js"></script>
+<script src="wand.js"></script>
 <script src="auto.js"></script>
 <script src="audit.js"></script>
 </body>

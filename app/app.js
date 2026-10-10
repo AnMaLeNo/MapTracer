@@ -37,7 +37,7 @@ let snapEdge = null;      // {from,to,x,y} arête sous la souris (jonction par i
 let prop = null;          // proposition du modèle pour le point courant : {branching, items:[{kind,x,y,conf,path,dirs}]}
 let propSeq = 0;          // numéro de la dernière requête (ignore les réponses périmées)
 let modelInfo = null;     // réponse de /api/model
-let mode = localStorage.getItem('mt-mode') === 'auto' ? 'auto' : 'trace';   // 'trace' (manuel/assisté) | 'auto' (auto.js)
+let mode = ['auto', 'wand'].includes(localStorage.getItem('mt-mode')) ? localStorage.getItem('mt-mode') : 'trace';   // 'trace' (manuel/assisté) | 'auto' (auto.js)
 
 /* ---------- dérivation de l'état depuis le journal ---------- */
 function derive(events, rev) {
@@ -146,7 +146,7 @@ function currentHeading(c) {
 async function requestProposal() {
   const c = cur();
   prop = null; dirty = true;
-  if (mode === 'auto' || !project.settings.assist || !img || !c || D.done) return updateAssistInfo();
+  if ((mode === 'auto' || mode === 'wand') || !project.settings.assist || !img || !c || D.done) return updateAssistInfo();
   if (!project.map || project.map.id.startsWith('local:')) return updateAssistInfo('Carte locale : le serveur ne la connaît pas (choisissez-la dans la liste).');
   const entry = mapIndex.find(m => m.id === project.map.id);
   if (!entry) return updateAssistInfo('Carte inconnue du serveur.');
@@ -184,7 +184,7 @@ function updateAssistInfo(msg) {
   const el = $('assistInfo');
   if (msg) { el.textContent = msg; return; }
   const cm = currentModel();
-  if (mode === 'auto' || !project.settings.assist) { el.textContent = cm ? `Modèle ${cm.name} prêt (${modelInfo.device}${cm.meta ? `, pas ${cm.meta.step} px, fenêtre ${cm.meta.window}, ${cm.meta.sectors} secteurs` : ''}).` : 'Mode manuel.'; return; }
+  if ((mode === 'auto' || mode === 'wand') || !project.settings.assist) { el.textContent = cm ? `Modèle ${cm.name} prêt (${modelInfo.device}${cm.meta ? `, pas ${cm.meta.step} px, fenêtre ${cm.meta.window}, ${cm.meta.sectors} secteurs` : ''}).` : 'Mode manuel.'; return; }
   if (!prop) { el.textContent = cm ? 'Aucune proposition.' : 'Modèle indisponible : dossier models/ vide ou server.py --model …'; return; }
   const names = { normal: 'point normal', intersection: 'intersection', end: 'cul-de-sac', junction: 'jonction' };
   if (!prop.items.length) { el.textContent = 'Le modèle ne voit aucune direction nouvelle (F si cul-de-sac).'; return; }
@@ -273,7 +273,7 @@ function resize() {
 const toScreen = (x, y) => [(x - view.cx) * view.s + W / 2, (y - view.cy) * view.s + H / 2];
 const toMap = (sx, sy) => [(sx - W / 2) / view.s + view.cx, (sy - H / 2) / view.s + view.cy];
 function recenter() {
-  if (mode === 'auto') return Auto.recenter();
+  if ((mode === 'auto' || mode === 'wand')) return Auto.recenter();
   const c = cur();
   if (c) { view.cx = c.x; view.cy = c.y; view.s = Math.min(W, H) * 0.8 / project.settings.window; }
   else if (img) { view.cx = img.width / 2; view.cy = img.height / 2; view.s = Math.min(W / img.width, H / img.height); }
@@ -292,7 +292,7 @@ function draw() {
     ctx.imageSmoothingEnabled = view.s < 2;
     ctx.drawImage(img, sx0, sy0, sx1 - sx0, sy1 - sy0, dx0, dy0, dx1 - dx0, dy1 - dy0);
   }
-  if (mode === 'auto') return Auto.draw();
+  if ((mode === 'auto' || mode === 'wand')) return Auto.draw();
   const c = cur(), w = project.settings.window;
   // fenêtre : assombrir l'extérieur
   if (c) {
@@ -403,7 +403,7 @@ function loop() { if (dirty) draw(); requestAnimationFrame(loop); }
 let drag = null;
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
-  if (mode === 'auto' && Auto.down(e)) return;
+  if ((mode === 'auto' || mode === 'wand') && Auto.down(e)) return;
   drag = { x: e.clientX, y: e.clientY, cx: view.cx, cy: view.cy, moved: false, btn: e.button };
 });
 // Recalcule hover/snap depuis la dernière position écran de la souris : la vue peut avoir
@@ -415,7 +415,7 @@ function updateHover() {
   const [mx, my] = toMap(mouse.x - r.left, mouse.y - r.top);
   hover = { x: mx, y: my };
   snapId = null; snapEdge = null;
-  if (mode === 'auto') return Auto.hover(mx, my);
+  if ((mode === 'auto' || mode === 'wand')) return typeof Auto !== 'undefined' && Auto.hover(mx, my);
   const thr = 10 / view.s; let best = thr;
   for (const id of D.order) { const p = D.points[id]; const d = Math.hypot(p.x - mx, p.y - my); if (d < best && id !== D.current) { best = d; snapId = id; } }
   if (snapId == null && cur() && !D.done) {
@@ -443,17 +443,17 @@ window.addEventListener('mousemove', e => {
     if (Math.hypot(dx, dy) > 4) drag.moved = true;
     if (drag.moved) { view.cx = drag.cx - dx / view.s; view.cy = drag.cy - dy / view.s; }
   }
-  if (mode === 'auto') Auto.move(e);
+  if ((mode === 'auto' || mode === 'wand') && typeof Auto !== 'undefined') Auto.move(e);
   updateHover();
 });
 window.addEventListener('mouseup', e => {
-  if (mode === 'auto' && Auto.up(e)) { drag = null; updateHover(); return; }
+  if ((mode === 'auto' || mode === 'wand') && Auto.up(e)) { drag = null; updateHover(); return; }
   if (!drag) return;
   const d = drag; drag = null;
   if (d.moved || e.target !== canvas) return;
   mouse = { x: e.clientX, y: e.clientY };
   updateHover();
-  if (mode === 'auto') return Auto.click(e);
+  if ((mode === 'auto' || mode === 'wand')) return Auto.click(e);
   if (snapId != null) { joinTo(snapId); return; }
   if (snapEdge) { splitEdge(snapEdge); return; }
   const hit = e.button === 0 && !e.shiftKey && proposalAt(hover.x, hover.y);
@@ -473,7 +473,7 @@ canvas.addEventListener('wheel', e => {
 window.addEventListener('keydown', e => {
   if (e.target.matches('input,select,textarea')) return;
   const k = e.key.toLowerCase();
-  if (mode === 'auto' && Auto.key(e)) return;
+  if ((mode === 'auto' || mode === 'wand') && Auto.key(e)) return;
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); doUndo(); return; }
   if (e.ctrlKey || e.metaKey) return;
   if (k === ' ') { e.preventDefault(); doAdvance(); }
@@ -503,7 +503,7 @@ function updateUI() {
   const st = $('status');
   $('mapInfo').textContent = project.map ? `${project.map.name} — ${project.map.width}×${project.map.height} px${project.map.georef ? ' · géoréférencée' : ''}` : 'Aucune carte chargée.';
   updateAssistInfo();
-  if (mode === 'auto') return Auto.ui();
+  if ((mode === 'auto' || mode === 'wand')) return Auto.ui();
   if (!img) st.textContent = 'Chargez une carte (liste ou fichier local).';
   else if (!c) st.textContent = 'Cliquez sur la carte pour poser le point de départ.';
   else if (D.done) st.textContent = 'Session terminée. Exportez le projet, ou Ctrl+Z pour reprendre.';
@@ -674,5 +674,5 @@ main.addEventListener('drop', e => { e.preventDefault(); main.classList.remove('
     else if (blob) await setImage(blob, { id: project.map.id, name: project.map.name, georef: project.map.georef });
   }
   refresh(false);
-  if (mode === 'auto') recenter();
+  if ((mode === 'auto' || mode === 'wand')) recenter();
 })();

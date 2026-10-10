@@ -171,20 +171,20 @@ function mapUrl() {
   const entry = mapIndex.find(m => m.id === project.map.id);
   return entry ? entry.url.replace(/^\.\.\//, '') : null;
 }
-async function startTrace(x, y) {
+async function startTrace(x, y, step = false) {
   if (!img) return warn('Chargez une carte.');
   const url = mapUrl(); if (!url) return warn('Carte locale : le serveur ne la connaît pas (choisissez-la dans la liste).');
   const cm = currentModel(); if (!cm) return warn('Aucun modèle disponible (dossier models/ vide ou server.py --model …).');
   if (auto.job && auto.job.status === 'running') return warn('Un suivi est déjà en cours (arrêtez-le d’abord).');
   x = Math.round(x); y = Math.round(y);
   if (x < 0 || y < 0 || x >= img.width || y >= img.height) return warn('Hors de la carte.');
-  A.arm = false; $('main').classList.remove('arm');
+  A.arm = false; A.armStep = false; $('main').classList.remove('arm');
   try {
-    const body = { map: url, model: cm.name, x, y, max_steps: auto.budget, graph: auto.graph.nodes.length ? auto.graph : undefined };
+    const body = { map: url, model: cm.name, x, y, max_steps: auto.budget, graph: auto.graph.nodes.length ? auto.graph : undefined, step: step || undefined };
     const r = await fetch('../api/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const res = await r.json();
     if (!r.ok) return warn('Suivi impossible : ' + (res.error || r.status));
-    auto.map = project.map; auto.seeds.push([x, y]); auto.job = { id: res.id, status: res.status, model: res.model };
+    auto.map = project.map; auto.seeds.push([x, y]); auto.job = { id: res.id, status: res.status, model: res.model, step: res.step, paused: res.paused, cursor: res.cursor };
     autoSave(true); pollJob(); Auto.ui();
   } catch (err) { warn('Erreur : ' + err.message); }
 }
@@ -198,11 +198,24 @@ function pollJob() {
       if (!r.ok) { auto.job.status = 'lost'; auto.job.error = res.error; autoSave(); Auto.ui(); return; }
       auto.graph = res.graph || auto.graph; A.idxOf = null;
       Object.assign(auto.job, { status: res.status, steps: res.steps, branches: res.branches, queue: res.queue, reasons: res.reasons,
-                                elapsed: res.elapsed_s, error: res.error, model: res.model });
+                                elapsed: res.elapsed_s, error: res.error, model: res.model, step: res.step, paused: res.paused, cursor: res.cursor });
       dirty = true; Auto.ui();
-      if (res.status === 'running') pollJob(); else autoSave(true);
+      if (res.cursor && res.step) Wand.at(res.cursor.x, res.cursor.y, 'point courant du modèle');
+      if (res.status === 'running') { if (!(res.step && res.paused)) pollJob(); }   // en pause : on attend « Pas suivant »
+      else autoSave(true);
     } catch (err) { pollJob(); }
-  }, 700);
+  }, auto.job.step ? 250 : 700);
+}
+async function stepTrace(n) {          // pas à pas : accorde n pas (0 = reprise en continu)
+  const j = auto.job;
+  if (!j || j.status !== 'running' || !j.step) return;
+  if (!j.paused) return;
+  try {
+    const r = await fetch(`../api/trace/${j.id}/step`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ n }) });
+    if (!r.ok) { const res = await r.json(); return warn('Pas impossible : ' + (res.error || r.status)); }
+    j.paused = false; if (n <= 0) j.step = false;
+    Auto.ui(); pollJob();
+  } catch (err) { warn('Erreur : ' + err.message); }
 }
 async function stopTrace() {
   if (!auto.job || auto.job.status !== 'running') return;
@@ -264,6 +277,7 @@ const Auto = {
     if (auto.job && auto.job.status === 'running') pollJob();
     $('autoBudget').addEventListener('change', () => { auto.budget = Math.max(100, +$('autoBudget').value || 20000); $('autoBudget').value = auto.budget; autoSave(); });
     $('btnAutoSeed').onclick = () => { A.arm = !A.arm; $('main').classList.toggle('arm', A.arm); Auto.ui(); };
+    Wand.init();
     $('btnAutoStop').onclick = stopTrace;
     $('btnAutoClear').onclick = async () => {
       if (!confirm('Effacer le tracé automatique, les départs et toutes les zones ?')) return;
@@ -293,6 +307,7 @@ const Auto = {
     dirty = true;
   },
   hover(mx, my) {
+    if (mode === 'wand') { dirty = true; return; }   // la vue a pu bouger (molette, glisser) : redessiner
     A.hover = { x: mx, y: my }; A.hNode = null; A.hEdge = null; A.hZone = null;
     const n = findNode(mx, my);
     if (n) { A.hNode = n.id; A.hZone = n.zi; }
@@ -300,6 +315,7 @@ const Auto = {
     dirty = true;
   },
   down(e) {
+    if (mode === 'wand') return false;
     const r = canvas.getBoundingClientRect(), [mx, my] = toMap(e.clientX - r.left, e.clientY - r.top);
     if (e.button !== 0) return false;
     const hit = findNode(mx, my);
@@ -309,6 +325,7 @@ const Auto = {
     return true;
   },
   move(e) {
+    if (mode === 'wand') return;
     const r = canvas.getBoundingClientRect(), [mx, my] = toMap(e.clientX - r.left, e.clientY - r.top);
     if (A.ndrag) {
       if (!A.ndrag.moved && Math.hypot(e.clientX - A.ndrag.sx, e.clientY - A.ndrag.sy) > 3) { A.ndrag.moved = true; activate(A.ndrag.zi); snapshot(); }
@@ -316,6 +333,7 @@ const Auto = {
     }
   },
   up(e) {
+    if (mode === 'wand') return false;
     if (A.ndrag) {
       const d = A.ndrag; A.ndrag = null;
       if (d.moved) { touch(); autoSave(); Auto.ui(); }
@@ -331,6 +349,7 @@ const Auto = {
   },
   click(e) {
     const r = canvas.getBoundingClientRect(), [mx, my] = toMap(e.clientX - r.left, e.clientY - r.top);
+    if (mode === 'wand') return Wand.click(e, mx, my);
     const hit = findNode(mx, my);
     if (e.button === 2) {                // clic droit : carrefour (nouveau point relié au point courant, ou bascule du type d'un point existant)
       if (hit) { activate(hit.zi); toggleKind(hit.id); A.sel = hit.id; dirty = true; Auto.ui(); return; }
@@ -346,6 +365,7 @@ const Auto = {
     return createZone(mx, my);                                     // clic dans le vide sans point courant : nouveau groupe
   },
   key(e) {
+    if (mode === 'wand') return Wand.key(e);
     const k = e.key.toLowerCase();
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); zoneUndo(); return true; }
     if (e.ctrlKey || e.metaKey) return false;
@@ -364,6 +384,7 @@ const Auto = {
   draw() {
     const z = zone(), s = view.s;
     const vis = (x, y) => x > -30 && y > -30 && x < W + 30 && y < H + 30;
+    if (mode === 'wand') Wand.draw();
     // tracé automatique
     const { node } = autoIndex();
     const dim = z ? 'rgba(255,77,77,.55)' : 'rgba(255,77,77,.9)';
@@ -427,19 +448,22 @@ const Auto = {
     }
     // départs
     for (const [x, y] of auto.seeds) { const [sx, sy] = toScreen(x, y); if (!vis(sx, sy)) continue; ctx.strokeStyle = '#39c47c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.moveTo(sx - 13, sy); ctx.lineTo(sx + 13, sy); ctx.moveTo(sx, sy - 13); ctx.lineTo(sx, sy + 13); ctx.stroke(); }
+    if (mode === 'wand' && auto.job && auto.job.status === 'running' && auto.job.step) Wand.drawCursor(auto.job.cursor);
     Audit.draw();
   },
   ui() {
+    if (mode === 'wand') return Wand.ui();
     if (typeof mode !== 'undefined' && mode !== 'auto') { $('hud').textContent = ''; return; }
     const j = auto.job, z = zone(), st = $('status');
     $('stats').innerHTML = `<span>Tracé auto <b>${auto.graph.nodes.length}</b> pts</span><span>Départs <b>${auto.seeds.length}</b></span>` +
       `<span>Zones <b>${auto.zones.length}</b></span><span>Points corrigés <b>${auto.zones.reduce((n, q) => n + q.nodes.length, 0)}</b></span>`;
-    const running = j && j.status === 'running';
-    const names = { running: 'en cours', done: 'terminé (plus rien à suivre)', budget: 'arrêté : budget de pas atteint', stopped: 'arrêté à la main', error: 'erreur', lost: 'perdu (serveur redémarré ?)' };
+    const running = j && j.status === 'running', stepping = running && j.step;
+    const names = { running: stepping ? (j.paused ? 'pas à pas, en pause — « Pas suivant »' : 'pas à pas, calcule…') : 'en cours', done: 'terminé (plus rien à suivre)', budget: 'arrêté : budget de pas atteint', stopped: 'arrêté à la main', error: 'erreur', lost: 'perdu (serveur redémarré ?)' };
     const reasons = r => r ? Object.entries(r).map(([k, v]) => `${{ end: 'culs-de-sac', junction: 'jonctions', low_confidence: 'perdu', out_of_map: 'bord de carte', max_steps: 'budget' }[k] || k} ${v}`).join(', ') : '';
     $('autoInfo').innerHTML = j ? `Suivi ${names[j.status] || j.status} — modèle <b>${j.model || ''}</b>${j.steps != null ? ` · ${j.steps} pas, ${j.branches} branches, ${j.queue} en file, ${j.elapsed || 0} s` : ''}` +
       (j.reasons ? `<br>Fins de branches : ${reasons(j.reasons)}` : '') + (j.error ? `<br>${j.error}` : '') : auto.graph.nodes.length ? `Tracé importé (<b>${auto.graph.nodes.length}</b> pts, ${auto.seeds.length} départ(s)) — « Nouveau départ » pour le prolonger.` : 'Aucun tracé : choisissez un modèle et cliquez un point de départ sur une galerie.';
     $('btnAutoStop').disabled = !running;
+
     $('btnAutoSeed').classList.toggle('active', A.arm);
     $('btnAutoSeed').textContent = A.arm ? 'Cliquez sur la carte… (Échap pour annuler)' : 'Nouveau départ : cliquer sur la carte';
     $('zoneCount').textContent = auto.zones.length;
@@ -452,6 +476,7 @@ const Auto = {
     } else $('zoneInfo').textContent = '';
     if (!img) st.textContent = 'Chargez une carte (liste).';
     else if (A.arm) st.textContent = 'Cliquez le nouveau point de départ sur une galerie.';
+    else if (stepping) st.textContent = 'Un pas à pas est en cours (mode Baguette magique).';
     else if (!auto.graph.nodes.length && !running) st.textContent = 'Cliquez un point de départ sur une galerie : le modèle trace tout ce qu’il peut.';
     else if (z) st.textContent = A.sel != null ? `Zone ${z.id}, point ${A.sel} : clic = point suivant · clic droit = carrefour · F = cul-de-sac · Échap = finir cette branche (puis cliquez un point pour en repartir, ou dans le vide pour un nouveau groupe).`
                                                : `Zone ${z.id} : cliquez un de ses points pour continuer depuis là, ou dans le vide pour commencer un autre groupe.`;
