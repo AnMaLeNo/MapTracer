@@ -80,6 +80,7 @@ class Tracer:
         self.out = G.Graph()
         self.queue = deque()
         self.branches = []          # rapport par branche
+        self.cursor = None          # dernier point évalué : {'node','x','y','heading','probs'} (pour le pas à pas)
         self.steps = 0
 
     # ---- modèle --------------------------------------------------------------------------------------------------
@@ -170,9 +171,10 @@ class Tracer:
         pending = []                                   # {'angle': abs, 'count', 'node'}
         reason, n_steps, coasting = 'max_steps', 0, 0
         while n_steps < self.max_branch_steps and self.steps < self.max_steps:
-            if self.hook:
-                self.hook(self)
             probs = self.model.predict(x, y, heading, self.crops(x, y, heading))
+            self.cursor = {'node': node, 'x': x, 'y': y, 'heading': heading, 'probs': np.asarray(probs, dtype=float).tolist()}
+            if self.hook:                              # après la prédiction : le hook voit le point courant et ce que le modèle y voit
+                self.hook(self)
             pk = [p for p in self.peaks(probs) if abs(p[0]) < math.radians(135)]
             if not pk:
                 if coasting >= self.coast:
