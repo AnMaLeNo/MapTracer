@@ -96,35 +96,52 @@ def _width(mask):
     return 2.0 * a / max(1, int((mask & ~ndi.binary_erosion(mask)).sum())) if a else 0.0
 
 
-def leaks(prev, new, max_neck=3, width_ratio=2.5, min_area=200, rel_area=0.3):
+def leaks(prev, new, max_neck=3, width_ratio=2.5, min_area=200, rel_area=0.3,
+          wall=3, sandwich_px=20, sandwich_frac=0.12, min_region=40):
     """Fuites entre deux crans de tolérance. `new` = pixels gagnés ; chaque région nouvelle (4-connexe) est reliée à l'ancienne
-    sélection par ses pixels de contact. Une région est une fuite si elle entre par un goulot (plus grand contact connexe)
-    de ≤ max_neck px et qu'elle est ≥ width_ratio fois plus large que l'ancienne sélection : l'eau s'engouffre par un pixel
-    clair du trait et inonde une zone qui ne ressemble pas à la galerie suivie. Une vraie branche, même fine, garde une largeur
-    comparable ; une salle qui s'ouvre largement n'a pas de goulot (→ pas bouchée, c'est le bond d'aire qui l'arrête).
-    Retourne [(pixels de contact à boucher, infos)]. Heuristique."""
+    sélection par ses pixels de contact. Une région entrée par un goulot (plus grand contact connexe) de ≤ max_neck px est une
+    fuite dans deux cas :
+    - « wide » : elle est ≥ width_ratio fois plus large que l'ancienne sélection (et ≥ min_area px² ou ≥ rel_area de son aire) —
+      l'eau s'engouffre par un pixel clair du trait et inonde une zone qui ne ressemble pas à la galerie suivie ;
+    - « sandwich » : elle longe l'ancienne sélection de l'autre côté d'un trait de ≤ wall px, sur ≥ sandwich_px pixels et
+      ≥ sandwich_frac de sa propre aire (hors voisinage du contact) — le trait d'une galerie n'a de l'eau que d'un côté ;
+      mouillé des deux côtés (intérieur d'une boucle, bande entre deux traits), il trahit une petite fuite qui n'élargit rien.
+      Un pilier est plus épais qu'un trait et n'est pas concerné.
+    Une vraie branche, même fine, garde une largeur comparable et s'éloigne de la galerie ; une salle qui s'ouvre largement
+    n'a pas de goulot (→ pas bouchée, c'est le bond d'aire qui l'arrête). Retourne [(pixels de contact à boucher, infos)]."""
     a_prev = int(prev.sum())
     if not a_prev:
         return []
     w_prev = max(_width(prev), 1.5)
     lab, n = ndi.label(new)
     reach = ndi.binary_dilation(prev, structure=CROSS)
+    near = ndi.binary_dilation(prev, structure=CROSS, iterations=wall + 1)
     out = []
-    for k in range(1, n + 1):
-        reg = lab == k
-        a = int(reg.sum())
-        if a < min_area and a < rel_area * a_prev:
+    for k, box in enumerate(ndi.find_objects(lab), 1):
+        if box is None:
             continue
-        contact = reg & reach
+        reg = lab[box] == k
+        a = int(reg.sum())
+        if a < min_region:
+            continue
+        contact = reg & reach[box]
         clab, cn = ndi.label(contact, structure=np.ones((3, 3)))
         if not cn:
             continue
         neck = int(max(ndi.sum(contact, clab, range(1, cn + 1))))
+        if neck > max_neck:
+            continue
         w = _width(reg)
-        if neck <= max_neck and w > width_ratio * w_prev:
-            ys, xs = np.nonzero(contact)
-            out.append((contact, {'contact': int(contact.sum()), 'necks': int(cn), 'neck': neck, 'area': a,
-                                  'width': round(w, 1), 'width_prev': round(w_prev, 1), 'x': int(xs.mean()), 'y': int(ys.mean())}))
+        wide = w > width_ratio * w_prev and (a >= min_area or a >= rel_area * a_prev)
+        beside = int((reg & near[box] & ~ndi.binary_dilation(contact, structure=CROSS, iterations=2 * wall)).sum())
+        sandwich = beside >= sandwich_px and beside >= sandwich_frac * a
+        if wide or sandwich:
+            full = np.zeros_like(prev)
+            full[box] = contact
+            ys, xs = np.nonzero(full)
+            out.append((full, {'kind': 'wide' if wide else 'sandwich', 'contact': int(contact.sum()), 'necks': int(cn),
+                               'neck': neck, 'area': a, 'width': round(w, 1), 'width_prev': round(w_prev, 1), 'beside': beside,
+                               'x': int(xs.mean()), 'y': int(ys.mean())}))
     return out
 
 
@@ -288,8 +305,8 @@ if __name__ == '__main__':
             print(f"tol {row['tol']:3d}  aire {row['area']:7d}  largeur {row['width']:5.1f}  bouchons {row['plugs']} ({row['plugged_px']} px)"
                   f"{'  ← bord' if row['border'] else ''}", file=sys.stderr)
         for p in r['plugs']:
-            print(f"  bouchon tol {p['tol']} en {p['x']},{p['y']} : goulot {p['neck']} px ({p['contact']} px de contact, {p['necks']} trou(s))"
-                  f" → {p['area']} px² gagnés, largeur {p['width']} vs {p['width_prev']}", file=sys.stderr)
+            print(f"  bouchon tol {p['tol']} en {p['x']},{p['y']} [{p['kind']}] : goulot {p['neck']} px ({p['contact']} px de contact, {p['necks']} trou(s))"
+                  f" → {p['area']} px² gagnés, largeur {p['width']} vs {p['width_prev']}, côte à côte {p['beside']} px", file=sys.stderr)
         print(f"arrêt : {r['stop']}", file=sys.stderr)
     r.pop('mask', None)
     for p in r['plugs']:

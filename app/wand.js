@@ -120,7 +120,7 @@ const Wand = {
         for (const [qx, qy] of p.pixels) { const [ax, ay] = toScreen(qx + 0.5, qy + 0.5); ctx.fillRect(ax - px / 2, ay - px / 2, px, px); }
         const [lx, ly] = toScreen(p.x + 0.5, p.y + 0.5);
         ctx.strokeStyle = '#ff2a2a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(lx, ly, px + 5, 0, 7); ctx.stroke();
-        if (view.s >= 2) { ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; const txt = `fuite bouchée à ${p.tol} (${p.area} px² évités)`; ctx.strokeText(txt, lx + px + 8, ly + 4); ctx.fillText(txt, lx + px + 8, ly + 4); }
+        if (view.s >= 2) { ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; const txt = `fuite bouchée à ${p.tol} — ${p.kind === 'sandwich' ? 'trait mouillé des deux côtés' : 'zone bien plus large'} (${p.area} px² évités)`; ctx.strokeText(txt, lx + px + 8, ly + 4); ctx.fillText(txt, lx + px + 8, ly + 4); }
       }
       const st = res.stats || {};
       if (st.center) {
@@ -214,8 +214,8 @@ const Wand = {
           s += `<br>Balayage 0…128 : ` + (!st2 ? 'aucun débordement net (salle, ou pas de palier avant le bond)'
             : st2.reason === 'porous' ? `<b>mur poreux à ${st2.tol}</b> : ${st2.plugged_px} px de goulots à boucher d'un coup, ${st2.plugged_area} px² derrière — le trait entier devient transparent, on propose ${st2.before}`
             : `<b>débordement à ${st2.tol}</b> : aire ×${st2.ratio}${st2.width_ratio >= 1.5 ? `, largeur ×${st2.width_ratio}` : ''}${st2.window_frac >= 0.25 ? `, ${Math.round(st2.window_frac * 100)} % de la fenêtre` : ''} sans goulot à boucher — on propose ${st2.before}`) + '.';
-          if (this.plugs.length) s += `<br>Fuites bouchées : ` + this.plugs.map(p => `<span title="goulot ${p.neck} px (${p.contact} px de contact), zone ${p.width} px de large vs galerie ${p.width_prev}">tol ${p.tol} → ${p.area} px²</span>`).join(' · ') + ` <span class="muted">(règle : zone entrée par un goulot ≤ 3 px et ≥ 2,5× plus large que la sélection ; survolez pour le détail)</span>`;
-          else if (this.plug) s += `<br>Aucune fuite bouchée (aucune zone entrée par un goulot ≤ 3 px).`;
+          if (this.plugs.length) s += `<br>Fuites bouchées : ` + this.plugs.map(p => `<span title="goulot ${p.neck} px (${p.contact} px de contact), zone ${p.width} px de large vs galerie ${p.width_prev}, longe la sélection sur ${p.beside} px">tol ${p.tol} → ${p.area} px² (${p.kind === 'sandwich' ? 'sandwich' : 'large'})</span>`).join(' · ') + ` <span class="muted">(règles : zone entrée par un goulot ≤ 3 px et soit ≥ 2,5× plus large que la sélection — « large » —, soit qui longe la sélection de l'autre côté du trait, sur ≥ 20 px et ≥ 12 % de son aire — « sandwich » : un trait de galerie n'est mouillé que d'un côté ; survolez pour le détail)</span>`;
+          else if (this.plug) s += `<br>Aucune fuite bouchée (aucune zone entrée par un goulot ≤ 3 px qui soit bien plus large ou qui longe la sélection de l'autre côté du trait).`;
         }
       }
     }

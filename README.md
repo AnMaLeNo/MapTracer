@@ -151,10 +151,14 @@ Rien n'est enregistré ni transmis au modèle.
    pour 0…128 par 4 (log ; pointillé jaune = largeur ; rouge = touche le bord).
 2. **Tolérance** au curseur ou `[` `]`. Le balayage 0…128 est **incrémental avec bouchage des fuites** (`sweep()` /
    `leaks()`) : à chaque cran, chaque zone nouvelle (4-connexe) est examinée avec ses pixels de contact à l'ancienne sélection ;
-   si elle entre par un **goulot ≤ 3 px** (plus grand contact connexe) et qu'elle est **≥ 2,5× plus large** que la sélection
-   suivie, c'est une fuite — un pixel clair dans le trait par lequel « l'eau » s'engouffre et inonde — et ses pixels d'entrée
-   sont interdits pour ce cran et tous les suivants (carrés rouges dans l'app, ▲ sur la courbe). Une vraie branche garde une
-   largeur comparable (fine ou pas) et n'est pas bouchée ; une salle qui s'ouvre largement n'a pas de goulot. Case « Boucher
+   si elle entre par un **goulot ≤ 3 px** (plus grand contact connexe), c'est une fuite — un pixel clair dans le trait par
+   lequel « l'eau » s'engouffre — dans deux cas : **« large »**, elle est **≥ 2,5× plus large** que la sélection suivie (elle
+   inonde) ; **« sandwich »**, elle **longe la sélection de l'autre côté du trait** (≤ 3 px) sur ≥ 20 px et ≥ 12 % de son aire,
+   hors voisinage du contact — un trait de galerie n'est mouillé que d'un côté, mouillé des deux (intérieur d'une boucle,
+   bande entre deux traits) il trahit une petite fuite qui n'élargit rien et que la première règle rate ; un pilier est plus
+   épais qu'un trait. Les pixels d'entrée sont interdits pour ce cran et tous les suivants (carrés rouges dans l'app, ▲ sur
+   la courbe). Une vraie branche garde une largeur comparable (fine ou pas) et s'éloigne de la galerie : pas bouchée ; une
+   salle qui s'ouvre largement n'a pas de goulot. Case « Boucher
    les fuites » à décocher pour comparer au remplissage brut. En « automatique » (défaut), la tolérance se cale sur le cran
    avant l'arrêt proposé : **débordement** (après un palier, aire ×2,5 *et* largeur ×1,5 ou ≥ ¼ de la fenêtre — une galerie
    fine qui « file » bondit en aire sans s'élargir et n'est pas un débordement) ou **mur poreux** (≥ 8 px de goulots nourrissant
@@ -180,6 +184,12 @@ la galerie et ses branches jusqu'à 68 (10 905 px²) ; à 72 le trait entier dev
 boucher) et c'est le débordement. Sur quatre points testés le bouchage ne retire jamais une vraie branche (la salle Page, 2 px
 de large, reste) ; il laisse passer les zones hachurées qui s'ouvrent par une bouche large, et ne peut rien pour les salles
 (Cabi-bis : pas de goulot, c'est le bond d'aire ×5 à 60 qui arrête).
+
+Exemple `4665, 4492` (avenue de Montsouris, rayon 256) : la règle « large » bouche 6 fuites jusqu'à 56, mais à 56 l'eau passe
+par 1 px dans l'intérieur hachuré d'une boucle de galerie à l'ouest de « Fantôme » (316 px², 7 px de large contre 3 : ratio
+2,35, sous le seuil) — c'est la règle « sandwich » qui la voit (100 px de la zone longent la galerie de l'autre côté du trait,
+32 % de son aire). Sur les cinq points de test, aucune vraie branche n'a ce profil (0 px « côte à côte ») ; les faux positifs
+évités par le seuil relatif sont les crans où une salle se remplit par morceaux reliés d'un pixel (côte à côte 0–7 % de l'aire).
 
 Observations au premier essai (trois points, voir la PR) : sur une galerie fine en double trait, le vide fait 2–3 px et la
 sélection reste minuscule jusqu'à ~36 puis file le long de la galerie (c'est le « bon » débordement : largeur estimée stable) ;
