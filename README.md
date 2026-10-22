@@ -137,6 +137,66 @@ la suit maintenant. Attention : les zones ayant servi à l'entraînement, ce chi
 pas la généralisation — celle-ci se lit sur les deux holdouts. Le mode Auto ne rend pas le modèle autonome :
 c'est l'outil qui mesure ses erreurs et les transforme en données.
 
+## Mode « Baguette magique » — preuve de concept (`app/wand.js`, `tools/magic_wand.py`, `/api/wand`, `/api/trace/<id>/step`)
+
+Troisième mode de l'app, pour *regarder* ce que sélectionne un remplissage flou depuis un point de galerie et où il déborde.
+Rien n'est enregistré ni transmis au modèle.
+
+1. **Clic** dans le blanc d'une galerie → `POST /api/wand` : composante **4-connexe** (un trait fin diagonal bloque) des pixels dont
+   chaque canal RGB est à ≤ tolérance de la couleur de référence (pixel cliqué, ou 90e centile clair du voisinage 7×7 si le point
+   tombe sur un trait → départ déplacé de ≤ 8 px), dans une fenêtre de rayon 128–512 px. Affiché : masque coloré (couleur et
+   opacité réglables, liseré pour les galeries de 2–3 px), centre suggéré (max de la transformée de distance à ≤ 12 px du point,
+   jaune, avec son rayon libre), **lecture heuristique** (galerie fine / galerie / salle / débordement, d'après largeur ≈
+   2·aire/périmètre, allongement par ACP, remplissage, contact avec le bord), détails chiffrés, et la **courbe aire(tolérance)**
+   pour 0…128 par 4 (log ; pointillé jaune = largeur ; rouge = touche le bord).
+2. **Tolérance** au curseur ou `[` `]`. Le balayage 0…128 est **incrémental avec bouchage des fuites** (`sweep()` /
+   `leaks()`) : à chaque cran, chaque zone nouvelle (4-connexe) est examinée avec ses pixels de contact à l'ancienne sélection ;
+   si elle entre par un **goulot ≤ 3 px** (plus grand contact connexe), c'est une fuite — un pixel clair dans le trait par
+   lequel « l'eau » s'engouffre — dans deux cas : **« large »**, elle est **≥ 2,5× plus large** que la sélection suivie (elle
+   inonde) ; **« sandwich »**, elle **longe la sélection de l'autre côté du trait** (≤ 3 px) sur ≥ 20 px et ≥ 12 % de son aire,
+   hors voisinage du contact — un trait de galerie n'est mouillé que d'un côté, mouillé des deux (intérieur d'une boucle,
+   bande entre deux traits) il trahit une petite fuite qui n'élargit rien et que la première règle rate ; un pilier est plus
+   épais qu'un trait. Les pixels d'entrée sont interdits pour ce cran et tous les suivants (carrés rouges dans l'app, ▲ sur
+   la courbe). Une vraie branche garde une largeur comparable (fine ou pas) et s'éloigne de la galerie : pas bouchée ; une
+   salle qui s'ouvre largement n'a pas de goulot. Case « Boucher
+   les fuites » à décocher pour comparer au remplissage brut. En « automatique » (défaut), la tolérance se cale sur le cran
+   avant l'arrêt proposé : **débordement** (après un palier, aire ×2,5 *et* largeur ×1,5 ou ≥ ¼ de la fenêtre — une galerie
+   fine qui « file » bondit en aire sans s'élargir et n'est pas un débordement) ou **mur poreux** (≥ 8 px de goulots nourrissant
+   ≥ 2× l'aire courante à boucher d'un coup : il n'y a plus de mur). Toucher le curseur désactive l'automatique. Tout est
+   heuristique et visible dans l'app (lecture, détail de chaque bouchon au survol).
+
+3. **Entrée** lance la boucle de suivi normale (`tools/trace.py`, même modèle, mêmes règles de branches) depuis le point cliqué en
+   pas à pas ; **N** = un pas ; « Continuer en continu » reprend le suivi normal. Côté serveur : `POST /api/trace {step: true}`,
+   le `hook` (appelé après la prédiction, `tr.cursor = {node, x, y, heading, probs}`) bloque sur une `threading.Condition`
+   jusqu'à `POST /api/trace/<id>/step {n}` (`n ≤ 0` = continu) ; `job_view` expose `step`, `paused`, `cursor`. Une pause > 1 h
+   arrête le job. La rose au point rouge montre les 32 secteurs (vert = ≥ seuil) et la baguette suit le point courant ; cliquer
+   ailleurs sonde sans bouger le modèle. Le tracé rouge est celui du mode Auto (même `auto.graph`, « Effacer le tracé » là-bas).
+
+```bash
+python3 tools/magic_wand.py maps/nexus_alkhemia_2011.jpg 4329 3213 --tol 32 --radius 192 --png /tmp/masque.png
+# rejouer un exemple (coordonnées du clic) : courbe cran par cran + planche fenêtre / tol / proposée / débordement
+python3 tools/magic_wand.py maps/nexus_alkhemia_2011.jpg 3572 5691 --tol 64 --steps --report /tmp/planche.png
+```
+
+Exemple `3572, 5691` (galerie sous le « réseau RATP ») : sans bouchage, à la tolérance 60 l'eau passe par un goulot de 3 px
+(trait gris ~200 devenu acceptable) et inonde 39 606 px² ; à 64 par 2 autres goulots d'1 px. Avec bouchage, la sélection suit
+la galerie et ses branches jusqu'à 68 (10 905 px²) ; à 72 le trait entier devient transparent (contacts larges, plus rien à
+boucher) et c'est le débordement. Sur quatre points testés le bouchage ne retire jamais une vraie branche (la salle Page, 2 px
+de large, reste) ; il laisse passer les zones hachurées qui s'ouvrent par une bouche large, et ne peut rien pour les salles
+(Cabi-bis : pas de goulot, c'est le bond d'aire ×5 à 60 qui arrête).
+
+Exemple `4665, 4492` (avenue de Montsouris, rayon 256) : la règle « large » bouche 6 fuites jusqu'à 56, mais à 56 l'eau passe
+par 1 px dans l'intérieur hachuré d'une boucle de galerie à l'ouest de « Fantôme » (316 px², 7 px de large contre 3 : ratio
+2,35, sous le seuil) — c'est la règle « sandwich » qui la voit (100 px de la zone longent la galerie de l'autre côté du trait,
+32 % de son aire). Sur les cinq points de test, aucune vraie branche n'a ce profil (0 px « côte à côte ») ; les faux positifs
+évités par le seuil relatif sont les crans où une salle se remplit par morceaux reliés d'un pixel (côte à côte 0–7 % de l'aire).
+
+Observations au premier essai (trois points, voir la PR) : sur une galerie fine en double trait, le vide fait 2–3 px et la
+sélection reste minuscule jusqu'à ~36 puis file le long de la galerie (c'est le « bon » débordement : largeur estimée stable) ;
+sur une salle ou une galerie large (Cabi-bis, salle des fêtes) elle remplit la pièce et ses piliers deviennent des trous ; le
+JPEG impose une tolérance ≥ 8–16 avant que quoi que ce soit ne se sélectionne. Distinguer « suit la galerie » de « inonde le fond »
+par la largeur plutôt que par l'aire est la piste à vérifier.
+
 ## Détecteur d'anomalies d'annotation (`tools/audit.py`, `/api/audit`, onglet « Anomalies »)
 
 Un modèle déjà entraîné rejoue chaque point annoté — projet du mode Tracer ou zones du mode Auto — et ses désaccords
