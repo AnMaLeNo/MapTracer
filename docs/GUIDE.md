@@ -249,22 +249,20 @@ Premier essai (v6-ft, départs `auto`, CPU) — voir la PR pour les planches :
 
 | zone | sans baguette | avec baguette |
 |---|---|---|
-| ho1 (projet 01, `4200,3200,5800,3600`) | couverture 97,6 %, précision 57,5 %, carrefours 14/15 (25 trouvés), 1 246 pas | couverture 83,4 %, précision 97,6 %, carrefours 10/15 (18 trouvés), 678 pas |
-| ho2 (projet 0202, `3000,2500,4100,2900`) | couverture 98,1 %, précision 58,9 %, carrefours 15/20 (42 trouvés), 1 927 pas | couverture 74,0 %, précision 54,3 %, carrefours 15/20 (40 trouvés), 1 675 pas |
+| ho1 (projet 01, `4200,3200,5800,3600`) | couverture 97,6 %, précision 57,5 %, carrefours 14/15 (25 trouvés), 1 246 pas | couverture 92,7 %, précision 69,4 %, carrefours 11/15 (39 trouvés), 1 053 pas |
+| ho2 (projet 0202, `3000,2500,4100,2900`) | couverture 98,1 %, précision 58,9 %, carrefours 15/20 (42 trouvés), 1 927 pas | couverture 55,4 %, précision 52,3 %, carrefours 12/20 (49 trouvés), 1 342 pas |
 
-Lecture : le recentrage fait ce qu'on attend (tracé au milieu, plus de zigzag ni de virage coupé ; décalage moyen 0,3 px par
-pas, 94 % des pas recentrés, 0–5 incohérents) et sur ho1 la précision monte parce que le tracé ne sort plus des galeries
-annotées. Mais la **couverture baisse**, et toujours de la même façon : le modèle perd confiance à l'entrée d'une galerie
-(« low_confidence » après 2–4 pas) là où la baguette voit un couloir net — ho1 : la galerie x 4483–4516, y 3378–3504, dont
-l'entrée nord est abandonnée après 4 pas (sans baguette, elle n'était atteinte que par un détour non annoté) ; ho2 : toute
-l'« av. de l'est » (x 3331–3577, lavis bleu, galerie large) où le point recentré au milieu de la galerie large est un état que le
-modèle connaît mal (3 pas puis abandon), alors que le point du modèle, collé au bord, passait. Le reste de l'écart est en
-cascade de ces deux entrées. Les réglages de carrefour (bras qui doivent continuer au-delà de l'anneau, raccourcis de ≤ 2 pas
-défaits, voisinage du nœud d'origine ignoré sur R = 1,5 largeur) font varier la couverture de ho2 de 98 % à 74 % d'une version
-à l'autre, pour quelques branches ouvertes ou non à ces mêmes endroits : les chiffres de couverture d'une seule graine ne
-départagent pas ces variantes, le tracé à l'écran si. Piste suivante évidente : quand le modèle ne voit rien mais que la
-baguette voit un seul bras devant, avancer le long de ce bras (aujourd'hui on avance tout droit 2 pas puis on s'arrête) ; et
-réentraîner avec des points recentrés, puisque le modèle n'a appris que des points posés à la main, souvent hors du milieu.
+Lecture : le recentrage fait ce qu'on attend (tracé au milieu, plus de zigzag ni de virage coupé ; décalage moyen 0,2–0,3 px
+par pas, ~90 % des pas recentrés, 0–5 incohérents). Les chiffres globaux, eux, ne sont **pas stables** : cinq versions successives
+du même mécanisme (choix du maximum local, bras qui doivent continuer, raccourcis défaits, voisinage d'origine, gain minimal) ont
+donné sur ho1 83–93 % de couverture et 69–98 % de précision, sur ho2 55–98 % de couverture — pour quelques branches ouvertes ou
+non aux mêmes endroits, et le reste en cascade. La cause revient toujours : le modèle perd confiance à l'entrée d'une galerie que
+la baguette voit nettement (« low_confidence » après 2–4 pas ; ho1 : entrée nord de la galerie x 4483–4516 ; ho2 : l'« av. de
+l'est » en lavis bleu, galerie large où le point recentré au milieu est un état que le modèle, entraîné sur des points posés à la
+main souvent au bord, connaît mal), et une branche de plus ou de moins change tout ce qui suit. Conclusion pratique : une seule
+graine sur deux zones ne départage pas ces variantes ; c'est le tracé à l'écran et le mode debug (ci-dessous) qui disent ce qui
+s'est passé à chaque point. Pistes : quand le modèle ne voit rien mais que la baguette voit un seul bras devant, avancer le long
+de ce bras (aujourd'hui on avance tout droit 2 pas puis on s'arrête) ; réentraîner avec des points recentrés.
 
 ## Détecteur d'anomalies d'annotation (`tools/audit.py`, `/api/audit`, onglet « Anomalies »)
 
