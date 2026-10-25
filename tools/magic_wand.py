@@ -145,7 +145,7 @@ def leaks(prev, new, max_neck=3, width_ratio=2.5, min_area=200, rel_area=0.3,
     return out
 
 
-def sweep(sub, ref, sx, sy, tols, plug=True, factor=2.5, min_tol=8, min_area=30, porous_px=8):
+def sweep(sub, ref, sx, sy, tols, plug=True, factor=2.5, min_tol=8, min_area=30, porous_px=8, sandwich_frac=0.12):
     """Balayage incrémental des tolérances. À chaque cran : remplissage, puis (si plug) détection des fuites par rapport au cran
     précédent ; leurs pixels de contact sont interdits pour ce cran et tous les suivants (le trou est « bouché »), et le
     remplissage est refait. Arrêt proposé (`stop`) au premier cran, après un palier (croissance < 1,3), où soit l'aire bondit
@@ -163,7 +163,7 @@ def sweep(sub, ref, sx, sy, tols, plug=True, factor=2.5, min_tol=8, min_area=30,
         step = []
         if plug and prev is not None and a_prev >= min_area and t >= min_tol:
             for _ in range(8):
-                found = leaks(prev, m & ~prev)
+                found = leaks(prev, m & ~prev, sandwich_frac=sandwich_frac)
                 if not found:
                     break
                 for c, info in found:
@@ -195,14 +195,14 @@ def sweep(sub, ref, sx, sy, tols, plug=True, factor=2.5, min_tol=8, min_area=30,
 _CACHE = {}
 
 
-def analyze(img, x, y, radius, tols, plug=True):
+def analyze(img, x, y, radius, tols, plug=True, sandwich_frac=0.12):
     """Fenêtre + référence + balayage, mémorisés par (image, point, rayon, crans, plug) : le curseur de tolérance ne recalcule rien."""
-    key = (id(img), float(x), float(y), int(radius), tuple(tols), bool(plug))
+    key = (id(img), float(x), float(y), int(radius), tuple(tols), bool(plug), float(sandwich_frac))
     if key in _CACHE:
         return _CACHE[key]
     sub, (ox, oy), (sx, sy) = window(img, x, y, radius)
     ref = reference(sub, sx, sy)
-    masks, rows, plugs, stop = sweep(sub, ref, sx, sy, tols, plug=plug)
+    masks, rows, plugs, stop = sweep(sub, ref, sx, sy, tols, plug=plug, sandwich_frac=sandwich_frac)
     S = {'sub': sub, 'ref': ref, 'sx': sx, 'sy': sy, 'ox': ox, 'oy': oy, 'tols': list(tols),
          'masks': masks, 'rows': rows, 'plugs': plugs, 'stop': stop}
     while len(_CACHE) >= 12:
@@ -234,11 +234,11 @@ def png_mask(mask, rgb=(0, 200, 255)):
     return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
-def wand(img, x, y, tol, radius=256, tols=None, sweep=True, near=12, plug=True):
+def wand(img, x, y, tol, radius=256, tols=None, sweep=True, near=12, plug=True, sandwich_frac=0.12):
     tols = list(tols or DEFAULT_TOLS)
-    S = analyze(img, x, y, radius, tols, plug=plug)
+    S = analyze(img, x, y, radius, tols, plug=plug, sandwich_frac=sandwich_frac)
     sub, ref, sx, sy, ox, oy = S['sub'], S['ref'], S['sx'], S['sy'], S['ox'], S['oy']
-    res = {'x': x, 'y': y, 'tol': tol, 'radius': radius, 'plug': bool(plug), 'origin': [ox, oy],
+    res = {'x': x, 'y': y, 'tol': tol, 'radius': radius, 'plug': bool(plug), 'sandwich_frac': float(sandwich_frac), 'origin': [ox, oy],
            'size': [sub.shape[1], sub.shape[0]], 'ref': [int(v) for v in ref], 'seed_px': [int(v) for v in sub[sy, sx]]}
     mask = mask_at(S, tol)
     used = (sx, sy) if mask[sy, sx] else None
@@ -265,7 +265,7 @@ def wand(img, x, y, tol, radius=256, tols=None, sweep=True, near=12, plug=True):
 
 def report_png(img, res, S_tols=(None, None, None), path=None):
     """Planche de contrôle : fenêtre brute, puis sélection à 3 tolérances (bouchons en rouge). Pour rejouer un exemple."""
-    S = analyze(img, res['x'], res['y'], res['radius'], DEFAULT_TOLS, plug=res['plug'])
+    S = analyze(img, res['x'], res['y'], res['radius'], DEFAULT_TOLS, plug=res['plug'], sandwich_frac=res['sandwich_frac'])
     sub8 = np.clip(np.asarray(S['sub']), 0, 255).astype(np.uint8)
     tiles = [sub8]
     for t in S_tols:
@@ -290,12 +290,13 @@ if __name__ == '__main__':
     ap.add_argument('image'); ap.add_argument('x', type=float); ap.add_argument('y', type=float)
     ap.add_argument('--tol', type=int, default=32); ap.add_argument('--radius', type=int, default=192)
     ap.add_argument('--no-plug', action='store_true', help='sans bouchage des fuites (comportement brut)')
+    ap.add_argument('--sandwich', type=float, default=12, help='fuite « sandwich » : %% minimal de la zone qui longe la sélection (défaut 12)')
     ap.add_argument('--png', help='écrit le masque PNG ici')
     ap.add_argument('--report', help='planche PNG : fenêtre, sélection à --tol, à la tolérance proposée, au cran du débordement')
     ap.add_argument('--steps', action='store_true', help='affiche la courbe cran par cran (aire, largeur, bouchons)')
     a = ap.parse_args()
     img = Image.open(a.image)
-    r = wand(img, a.x, a.y, a.tol, a.radius, plug=not a.no_plug)
+    r = wand(img, a.x, a.y, a.tol, a.radius, plug=not a.no_plug, sandwich_frac=a.sandwich / 100)
     if a.png and r['mask']:
         open(a.png, 'wb').write(base64.b64decode(r['mask'].split(',', 1)[1]))
     if a.report:
