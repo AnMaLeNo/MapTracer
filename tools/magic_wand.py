@@ -24,13 +24,15 @@ def window(img, x, y, radius):
     return sub, (x0, y0), (int(round(x)) - x0, int(round(y)) - y0)
 
 
-def reference(sub, sx, sy, half=3, far=40):
-    """Couleur de référence : le pixel cliqué (comme la baguette de Photoshop), sauf s'il tombe sur un trait — alors le ton clair
-    dominant du voisinage (2·half+1)² (90e centile par canal), puisque la galerie est le vide clair entre deux traits."""
-    seed = sub[sy, sx].astype(float)
-    patch = sub[max(0, sy - half):sy + half + 1, max(0, sx - half):sx + half + 1].reshape(-1, 3)
+def reference(sub, sx, sy, half=3, far=40, quant=4):
+    """Couleur de référence : le ton clair dominant du voisinage (2·half+1)² — médiane des pixels proches (≤ far par canal) du
+    90e centile, arrondie au multiple de `quant`. Elle ne dépend donc pas du pixel exact cliqué (ni de son bruit JPEG, ni d'un
+    trait sous le curseur) : deux clics voisins donnent la même référence, donc la même sélection et les mêmes bouchons."""
+    patch = sub[max(0, sy - half):sy + half + 1, max(0, sx - half):sx + half + 1].reshape(-1, 3).astype(float)
     light = np.percentile(patch, 90, axis=0)
-    return seed if np.abs(seed - light).max() <= far else light
+    near = patch[np.abs(patch - light).max(axis=1) <= far]
+    ref = np.median(near, axis=0) if len(near) else light
+    return np.clip(np.round(ref / quant) * quant, 0, 255)
 
 
 def candidates(sub, ref, tol):

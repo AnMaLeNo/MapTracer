@@ -7,7 +7,9 @@ Les modèles sont les sous-dossiers de --models-dir (défaut : models/ s'il exis
 propose la liste et chaque requête /api/predict nomme le modèle voulu (`model`). --model ajoute un fichier isolé.
 Sans aucun modèle, l'app fonctionne en mode manuel seulement (l'API répond 503).
 
-Mode Auto : POST /api/trace {map, model, x, y[, heading, graph, max_steps, thr]} lance en arrière-plan la boucle de suivi
+Mode Auto : POST /api/trace {map, model, x, y[, heading, graph, max_steps, thr, wand]} lance en arrière-plan la boucle de suivi
+(`wand` : baguette magique à chaque pas — recentrage « ballon » + carrefours, tools/wand_refine.py ; `debug` : garde par nœud ce que
+le modèle a vu et ce que la baguette a fait, lu par GET /api/trace/<job>/node/<id>)
 complète de tools/trace.py depuis ce point (en prolongeant `graph` s'il est donné) et renvoie {job} ; GET /api/trace/<job>
 donne l'avancement et le graphe produit jusque-là ; POST /api/trace/<job>/stop l'interrompt.
 
@@ -122,7 +124,7 @@ def grant_steps(job, n):
 
 
 def job_view(job):
-    return {k: job[k] for k in ('id', 'status', 'model', 'steps', 'branches', 'queue', 'error', 'seed', 'reasons', 'graph')} | \
+    return {k: job[k] for k in ('id', 'status', 'model', 'steps', 'branches', 'queue', 'error', 'seed', 'reasons', 'graph', 'wand', 'debug')} | \
            {'elapsed_s': round((job.get('t_end') or time.time()) - job['t0'], 1),
             'step': job.get('step', False), 'paused': job.get('paused', False), 'cursor': job.get('cursor')}
 
@@ -138,6 +140,7 @@ def start_trace(req):
     STATE['job_seq'] += 1
     job = {'id': STATE['job_seq'], 'status': 'running', 'model': name, 'steps': 0, 'branches': 0, 'queue': 0, 'error': None,
            'seed': [x, y], 'reasons': {}, 'graph': req.get('graph') or {'nodes': [], 'edges': []}, 'stop': False,
+           'wand': bool(req.get('wand')), 'debug': bool(req.get('debug')), 'tracer': None,
            't0': time.time(), 't_snap': 0.0, 't_end': None,
            # pas à pas : le fil de suivi s'arrête après chaque prédiction tant que `grant` (pas accordés via /step) est nul
            'step': bool(req.get('step')), 'grant': 0, 'paused': False, 'cursor': None, 'cv': threading.Condition()}
@@ -178,8 +181,14 @@ def start_trace(req):
     def work():
         try:
             mt = m.meta
+            refiner = None
+            if job['wand']:
+                import wand_refine
+                refiner = wand_refine.WandRefiner(img, radius=int(req.get('wand_radius', 96)), tol_max=int(req.get('wand_tol_max', 64)))
             tr = T.Tracer(m, mt['step'], mt['sectors'], float(req.get('thr', mt.get('thr', 0.5))), img, mt['window'],
-                          trace_width=mt['trace_width'], map_size=img.size, max_steps=int(req.get('max_steps', 20000)), hook=hook)
+                          trace_width=mt['trace_width'], map_size=img.size, max_steps=int(req.get('max_steps', 20000)), hook=hook,
+                          refiner=refiner, debug=job['debug'])
+            job['tracer'] = tr
             if req.get('graph'):
                 tr.out = G.Graph.from_dict(req['graph'])
             tr.seed(x, y, None if heading is None else float(heading))
@@ -266,9 +275,15 @@ class H(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split('?')[0]
         if path.startswith('/api/trace/') or path.startswith('/api/audit/'):
-            job = STATE['jobs'].get(int(path.split('/')[3]) if path.split('/')[3].isdigit() else None)
+            parts = path.split('/')
+            job = STATE['jobs'].get(int(parts[3]) if parts[3].isdigit() else None)
             if not job:
                 return self.reply(404, {'error': 'tâche inconnue (serveur redémarré ?)'})
+            if len(parts) >= 6 and parts[4] == 'node':                 # debug : ce que le modèle a vu et ce que la baguette a fait à ce nœud
+                tr, nid = job.get('tracer'), int(parts[5]) if parts[5].isdigit() else None
+                if tr is None or not job.get('debug'):
+                    return self.reply(404, {'error': 'suivi lancé sans la case Debug'})
+                return self.reply(200, {'id': nid, 'node': tr.out.nodes.get(nid), 'dbg': tr.dbg.get(nid)})
             return self.reply(200, audit_view(job) if 'anomalies' in job else job_view(job))
         if path == '/api/model':
             lst = []
