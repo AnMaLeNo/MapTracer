@@ -214,7 +214,9 @@ défaut) active, pour chaque point posé par le modèle (jamais le départ) :
    est au milieu de la galerie, et 2·D est la largeur locale (champ `w` du nœud, disques cyan dans l'app). On prend le maximum
    local le plus proche du cap, pas le maximum absolu : au départ d'une branche latérale, le plus gros disque est au centre du
    carrefour, derrière, et le point y retomberait (c'était le premier bug : branches de 2 pas finissant en « junction »).
-   Le modèle garde le choix de la direction ; la baguette ne corrige que la position.
+   Le modèle garde le choix de la direction ; la baguette ne corrige que la position. Si le gain de D par rapport à la direction
+   du modèle est < 0,25 px (galerie de 2 px de vide : D ≈ 1 partout, l'argmax est du bruit et déviait le cap de 45°), on ne
+   dévie pas — trouvé avec le mode debug ci-dessous.
 3. **Carrefours** — deux anneaux (rayons ≈ 2 et 3 demi-largeurs) autour du point recentré ; chaque arc d'anneau dans la sélection
    d'ouverture ≥ 15°, présent sur les deux anneaux dans la même direction (± 30°), est un **bras** (champ `arms`, degrés). Le bras
    arrière (± 60° du cap inverse) est ignoré ; les autres, à ≥ 20° de la continuation choisie par le modèle, entrent dans la même
@@ -227,6 +229,14 @@ défaut) active, pour chaque point posé par le modèle (jamais le départ) :
    mesurée est sans rapport avec celle des 12 derniers pas de la branche (> 3× la médiane et > médiane + 6 px : `incoherent`,
    point jaune), le point du modèle est gardé tel quel. Ce n'est pas encore une comparaison des sélections entre points
    voisins, seulement des largeurs.
+
+**Mode debug** (case « Debug » du mode Auto, à cocher *avant* de lancer le départ ; `trace.py --debug` écrit `trace_debug.json`) :
+le serveur garde pour chaque point du tracé ce que le modèle a vu au point précédent (32 probabilités, continuation choisie,
+latérales vues, directions en attente et leur source) et ce que la baguette a fait (point du modèle avant recentrage, sélection
+utilisée — point d'analyse, tolérance, référence, arrêt —, profil D(θ) sur l'arc, bras vus, raison d'un refus). Un clic sur un point
+du tracé rouge ouvre le panneau et dessine : point du modèle (orange) → point final, arc du pas coloré par D (vert = dans la
+sélection, rouge = dehors), ballon (cercle cyan), bras (jaune), rose des secteurs au point précédent, et la sélection de la
+baguette de ce pas en surimpression. Lecture via `GET /api/trace/<job>/node/<id>` ; perdu au redémarrage du serveur.
 
 ```bash
 # même zone de validation, avec et sans baguette (couverture / précision / carrefours + résumé de la baguette)

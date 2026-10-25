@@ -26,12 +26,12 @@ import magic_wand as WD
 
 class WandRefiner:
     def __init__(self, img, radius=96, tol_max=64, arc_deg=45, arc_step_deg=3, margin=24, ring_k=(2.0, 3.0),
-                 min_arm_deg=15, reach_px=5.0, coherent_k=3.0, verbose=False):
+                 min_arm_deg=15, reach_px=5.0, coherent_k=3.0, min_gain=0.25, verbose=False):
         self.img, self.radius, self.tol_max = img, radius, tol_max
         self.arc = [math.radians(d) for d in range(-arc_deg, arc_deg + 1, arc_step_deg)]
         self.margin, self.ring_k, self.min_arm, self.coherent_k, self.verbose = margin, ring_k, math.radians(min_arm_deg), coherent_k, verbose
-        self.reach_px = reach_px
-        self.S, self.tol, self.mask, self.D = None, None, None, None
+        self.reach_px, self.min_gain = reach_px, min_gain
+        self.S, self.tol, self.mask, self.D, self.seed = None, None, None, None, None
         self.n_analyses = 0
         self.stats = {'steps': 0, 'recentred': 0, 'off': 0, 'incoherent': 0, 'shift_sum': 0.0, 'arms_seen': 0}
 
@@ -57,7 +57,7 @@ class WandRefiner:
         tol = self.tol_max if stop is None else stop['before']
         if tol is None:
             self.S = None; return False
-        self.S, self.tol = S, min(int(tol), self.tol_max)
+        self.S, self.tol, self.seed = S, min(int(tol), self.tol_max), (int(round(x)), int(round(y)))
         self.mask = WD.mask_at(S, self.tol)
         self.D = ndi.distance_transform_edt(self.mask) if self.mask.any() else None
         return self.D is not None
@@ -85,11 +85,15 @@ class WandRefiner:
         d = self.dist(xs, ys)
         mid = self.dist((px + xs) / 2, (py + ys) / 2)        # le segment doit rester dans la sélection
         d = np.where(mid > 0, d, 0.0)
+        self.last_arc = [[round(math.degrees(a)), round(float(v), 2)] for a, v in zip(self.arc, d)]
         if d.max() <= 0.5:
             return None
         cands = [i for i in range(len(d)) if d[i] > 0.5
                  and (i == 0 or d[i] >= d[i - 1]) and (i == len(d) - 1 or d[i] >= d[i + 1])]
         i = min(cands, key=lambda k: abs(self.arc[k]))
+        i0 = min(range(len(d)), key=lambda k: abs(self.arc[k]))          # la direction du modèle elle-même
+        if d[i0] > 0.5 and d[i] < d[i0] + self.min_gain:                 # gain négligeable (galerie de 2 px : D ≈ 1 partout) :
+            i = i0                                                       # on ne dévie pas le cap pour rien
         return float(xs[i]), float(ys[i]), float(th[i]), float(d[i])
 
     # ---- carrefours ------------------------------------------------------------------------------------------------
@@ -119,35 +123,63 @@ class WandRefiner:
         return out
 
     # ---- un pas ------------------------------------------------------------------------------------------------------
-    def refine(self, px, py, qx, qy, heading, step, hist_w):
-        """(px,py) → point précédent, (qx,qy) → point proposé par le modèle. Renvoie (x, y, cap, info)."""
+    def refine(self, px, py, qx, qy, heading, step, hist_w, debug=False):
+        """(px,py) → point précédent, (qx,qy) → point proposé par le modèle. Renvoie (x, y, cap, info) ; avec debug, info['dbg']
+        raconte le pas : point du modèle, sélection utilisée, profil D(θ) sur l'arc, bras, raison d'un refus."""
         self.stats['steps'] += 1
         info = {'wand': 'off'}
-        if not self.ensure(qx, qy):
-            self.stats['off'] += 1
-            return qx, qy, heading, info
-        rc = self.recenter(px, py, heading, step)
-        if rc is None:
-            self.stats['off'] += 1
-            return qx, qy, heading, info
-        x, y, h, r = rc
-        info['w'] = round(2 * r, 1)
-        if hist_w:
-            med = float(np.median(hist_w[-12:]))
-            if 2 * r > max(self.coherent_k * med, med + 6):
-                self.stats['incoherent'] += 1
-                info['wand'] = 'incoherent'
+        dbg = {'model': [round(qx, 2), round(qy, 2)], 'prev': [round(px, 2), round(py, 2)], 'head_model': round(math.degrees(heading) % 360),
+               'sel': None, 'arc': None, 'arms_all': None} if debug else None
+        self.last_arc = None
+        try:
+            inside = self.ensure(qx, qy)
+            if dbg and self.S is not None:
+                st = self.S['stop']
+                dbg['sel'] = {'x': self.seed[0], 'y': self.seed[1], 'radius': self.radius, 'tol': self.tol,
+                              'ref': [int(v) for v in self.S['ref']], 'proposed': None if st is None else st['before'],
+                              'stop': None if st is None else st['reason'], 'area': int(self.mask.sum())}
+            if not inside:
+                self.stats['off'] += 1
+                if dbg:
+                    dbg['reason'] = 'off : le point du modèle n\'est pas dans la sélection (trait, texte, lavis ?) — gardé tel quel'
                 return qx, qy, heading, info
-        shift = math.hypot(x - qx, y - qy)
-        self.stats['recentred'] += 1; self.stats['shift_sum'] += shift
-        info.update({'wand': 'ok', 'shift': round(shift, 2), 'tol': self.tol})
-        arms = self.arms(x, y, r)
-        back = [a for a in arms if abs((a - (h + math.pi) + math.pi) % (2 * math.pi) - math.pi) <= math.radians(60)]
-        fwd = [a for a in arms if a not in back]
-        info['arms'] = [round(math.degrees(a)) for a in fwd]
-        if len(fwd) >= 2:
-            self.stats['arms_seen'] += 1
-        return x, y, h, info
+            rc = self.recenter(px, py, heading, step)
+            if dbg:
+                dbg['arc'] = self.last_arc
+            if rc is None:
+                self.stats['off'] += 1
+                if dbg:
+                    dbg['reason'] = 'off : aucune position de l\'arc n\'est dans la sélection (D ≤ 0,5 partout) — gardé tel quel'
+                return qx, qy, heading, info
+            x, y, h, r = rc
+            info['w'] = round(2 * r, 1)
+            if dbg:
+                dbg['r'] = round(r, 2); dbg['head'] = round(math.degrees(h) % 360)
+                dbg['hist_w'] = [round(v, 1) for v in hist_w[-12:]]
+            if hist_w:
+                med = float(np.median(hist_w[-12:]))
+                if 2 * r > max(self.coherent_k * med, med + 6):
+                    self.stats['incoherent'] += 1
+                    info['wand'] = 'incoherent'
+                    if dbg:
+                        dbg['reason'] = f'incoherent : largeur {2 * r:.1f} px contre médiane {med:.1f} px des 12 derniers pas — gardé tel quel'
+                    return qx, qy, heading, info
+            shift = math.hypot(x - qx, y - qy)
+            self.stats['recentred'] += 1; self.stats['shift_sum'] += shift
+            info.update({'wand': 'ok', 'shift': round(shift, 2), 'tol': self.tol})
+            arms = self.arms(x, y, r)
+            back = [a for a in arms if abs((a - (h + math.pi) + math.pi) % (2 * math.pi) - math.pi) <= math.radians(60)]
+            fwd = [a for a in arms if a not in back]
+            info['arms'] = [round(math.degrees(a)) for a in fwd]
+            if dbg:
+                dbg['arms_all'] = [round(math.degrees(a) % 360) for a in arms]
+                dbg['reason'] = 'ok : recentré' + (f' de {shift:.2f} px' if shift else '')
+            if len(fwd) >= 2:
+                self.stats['arms_seen'] += 1
+            return x, y, h, info
+        finally:
+            if dbg:
+                info['dbg'] = dbg
 
     def summary(self):
         s = dict(self.stats)

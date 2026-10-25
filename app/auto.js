@@ -181,11 +181,12 @@ async function startTrace(x, y, step = false) {
   A.arm = false; A.armStep = false; $('main').classList.remove('arm');
   try {
     const body = { map: url, model: cm.name, x, y, max_steps: auto.budget, graph: auto.graph.nodes.length ? auto.graph : undefined, step: step || undefined,
-                   wand: $('autoWand').checked || undefined };
+                   wand: $('autoWand').checked || undefined, debug: $('autoDebug').checked || undefined };
     const r = await fetch('../api/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const res = await r.json();
     if (!r.ok) return warn('Suivi impossible : ' + (res.error || r.status));
-    auto.map = project.map; auto.seeds.push([x, y]); auto.job = { id: res.id, status: res.status, model: res.model, step: res.step, paused: res.paused, cursor: res.cursor };
+    auto.map = project.map; auto.seeds.push([x, y]); auto.job = { id: res.id, status: res.status, model: res.model, step: res.step, paused: res.paused, cursor: res.cursor, debug: res.debug };
+    A.dbg = null;
     autoSave(true); pollJob(); Auto.ui();
   } catch (err) { warn('Erreur : ' + err.message); }
 }
@@ -221,6 +222,101 @@ async function stepTrace(n) {          // pas à pas : accorde n pas (0 = repris
 async function stopTrace() {
   if (!auto.job || auto.job.status !== 'running') return;
   try { await fetch(`../api/trace/${auto.job.id}/stop`, { method: 'POST' }); } catch (_) {}
+}
+
+/* ---------- debug : contexte d'un point du tracé ---------- */
+function findTraceNode(mx, my) {
+  let best = 8 / view.s, hit = null;
+  for (const n of auto.graph.nodes) { const d = Math.hypot(n.x - mx, n.y - my); if (d < best) { best = d; hit = n; } }
+  return hit;
+}
+const DEG = a => `${a}°`;
+async function debugNode(n) {
+  A.dbg = { node: n, data: null, mask: null, err: null }; dirty = true; Auto.ui();
+  if (!auto.job || !auto.job.debug) { A.dbg.err = 'Ce tracé a été lancé sans la case Debug : relancez un départ avec la case cochée.'; Auto.ui(); return; }
+  try {
+    const r = await fetch(`../api/trace/${auto.job.id}/node/${n.id}`);
+    const res = await r.json();
+    if (!r.ok) { A.dbg.err = res.error || r.status; Auto.ui(); return; }
+    if (A.dbg.node !== n) return;
+    A.dbg.data = res; dirty = true; Auto.ui();
+    const sel = res.dbg && res.dbg.wand && res.dbg.wand.sel;
+    if (sel) {                                      // la sélection de la baguette utilisée à ce pas (même point d'analyse, même tolérance)
+      const url = mapUrl();
+      const w = await fetch('../api/wand', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ map: url, x: sel.x, y: sel.y, tol: sel.tol, radius: sel.radius, sweep: false, plug: true }) });
+      const wr = await w.json();
+      if (w.ok && wr.mask && A.dbg.node === n) { const im = new Image(); im.onload = () => { A.dbg.mask = { im, origin: wr.origin, size: wr.size }; dirty = true; }; im.src = wr.mask; }
+    }
+  } catch (err) { A.dbg.err = err.message; Auto.ui(); }
+}
+function debugHtml() {
+  const d = A.dbg; if (!d) return '';
+  const n = d.node, head = `<b>Point ${n.id}</b> (${n.x.toFixed(1)}, ${n.y.toFixed(1)}) — ${n.kind}${n.src ? ', carrefour vu par : ' + n.src : ''}${n.w ? `, largeur ${n.w} px` : ''}${n.wand ? `, baguette : ${n.wand}` : ''}`;
+  if (d.err) return `${head}<br><span style="color:#ff9f9f">${d.err}</span>`;
+  if (!d.data) return `${head}<br>…`;
+  const g = d.data.dbg;
+  if (!g) return `${head}<br>Pas de contexte pour ce point (départ, ou point raccordé).`;
+  const probs = g.probs || [], K = probs.length;
+  const top = probs.map((p, i) => [p, i]).filter(([p]) => p >= 0.15).sort((a, b) => b[0] - a[0]).slice(0, 6)
+    .map(([p, i]) => `${Math.round((i / K) * 360 - 180 + 180 / K) >= 180 ? '' : ''}${((i * 360 / K + 180) % 360 - 180).toFixed(0)}° : ${(p * 100).toFixed(0)} %`).join(', ');
+  let h = `${head}<br><b>Modèle</b> (au point précédent ${g.from}) : continuation choisie ${DEG(g.main_deg)} relative au cap` +
+          `${g.sides_deg.length ? ', latérales vues ' + g.sides_deg.map(DEG).join(' ') : ', pas de latérale'}${g.coasting ? ', à l’aveugle depuis ' + g.coasting + ' pas' : ''}` +
+          `<br>Secteurs ≥ 15 % : ${top || 'aucun'}` +
+          (g.pending.length ? `<br>Directions latérales en attente : ${g.pending.map(p => `${DEG(p.deg)} ×${p.count}${p.miss ? ' (manquée ' + p.miss + ')' : ''} [${p.src.join('+')}]`).join(' ; ')}` : '');
+  const w = g.wand;
+  if (w) {
+    h += `<br><b>Baguette</b> : point du modèle (${w.model[0]}, ${w.model[1]}), cap ${DEG(w.head_model)}` +
+         (w.head != null ? ` → recentré en (${n.x.toFixed(1)}, ${n.y.toFixed(1)}), cap ${DEG(w.head)}, ballon r = ${w.r} px` : '') +
+         `<br>${w.reason || ''}`;
+    if (w.sel) h += `<br>Sélection : analysée en (${w.sel.x}, ${w.sel.y}) rayon ${w.sel.radius}, tolérance ${w.sel.tol}${w.sel.proposed != null && w.sel.proposed !== w.sel.tol ? ` (proposée ${w.sel.proposed}, plafonnée)` : ''}, réf. rgb(${w.sel.ref.join(',')}), ${w.sel.area} px²${w.sel.stop ? ', arrêt : ' + w.sel.stop : ''}`;
+    if (w.arc) { const best = w.arc.reduce((m, a) => a[1] > m[1] ? a : m, w.arc[0]); h += `<br>Ballon sur l’arc (θ relatif : D px) : ${w.arc.filter((a, i) => i % 3 === 0 || a === best).map(a => `${a[0]}:${a[1]}`).join(' ')} — max ${best[1]} à ${DEG(best[0])}`; }
+    if (w.arms_all) h += `<br>Bras vus autour du point recentré : ${w.arms_all.length ? w.arms_all.map(DEG).join(' ') : 'aucun'} (arrière = cap ± 180°)`;
+    if (w.hist_w && w.hist_w.length) h += `<br>Largeurs des pas précédents : ${w.hist_w.join(' ')}`;
+  } else h += '<br>Baguette inactive à ce pas.';
+  return h;
+}
+function drawDebug() {
+  const d = A.dbg; if (!d) return;
+  const n = d.node, s = view.s;
+  if (d.mask) {                                              // sélection de la baguette à ce pas
+    const [ox, oy] = d.mask.origin, [w, h] = d.mask.size, [sx, sy] = toScreen(ox, oy), [ex, ey] = toScreen(ox + w, oy + h);
+    ctx.imageSmoothingEnabled = false; ctx.globalAlpha = 0.35; ctx.drawImage(d.mask.im, sx, sy, ex - sx, ey - sy); ctx.globalAlpha = 1;
+    ctx.setLineDash([4, 6]); ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1; ctx.strokeRect(sx, sy, ex - sx, ey - sy); ctx.setLineDash([]);
+  }
+  const g = d.data && d.data.dbg, w = g && g.wand;
+  const [x, y] = toScreen(n.x, n.y);
+  if (w) {
+    const [px, py] = toScreen(w.prev[0], w.prev[1]), [qx, qy] = toScreen(w.model[0], w.model[1]);
+    if (w.arc && w.arc.length) {                             // arc du pas, coloré par D (sombre = hors sélection)
+      const step = Math.hypot(w.model[0] - w.prev[0], w.model[1] - w.prev[1]), dmax = Math.max(0.1, ...w.arc.map(a => a[1]));
+      for (const [deg, dv] of w.arc) {
+        const th = (w.head_model + deg) * Math.PI / 180, [ax, ay] = toScreen(w.prev[0] + step * Math.cos(th), w.prev[1] + step * Math.sin(th));
+        ctx.fillStyle = dv > 0.5 ? `rgba(80,255,80,${0.35 + 0.65 * dv / dmax})` : 'rgba(255,60,60,.7)';
+        ctx.beginPath(); ctx.arc(ax, ay, Math.max(1.5, s * 0.25), 0, 7); ctx.fill();
+      }
+    }
+    ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(qx, qy); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#ff7a1a'; ctx.beginPath(); ctx.arc(qx, qy, Math.max(3, s * 0.6), 0, 7); ctx.fill();   // point du modèle
+    if (w.r) { ctx.strokeStyle = '#00c8ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, w.r * s, 0, 7); ctx.stroke(); }   // ballon
+    if (w.arms_all) for (const a of w.arms_all) {            // bras
+      const th = a * Math.PI / 180, L = Math.max(12, (w.r || 2) * 3 * s + 6);
+      ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + L * Math.cos(th), y + L * Math.sin(th)); ctx.stroke();
+    }
+  }
+  if (g && g.probs) {                                        // rose des secteurs du modèle au point précédent (vert ≥ seuil)
+    const from = autoIndex().node.get(g.from); if (from) {
+      const [fx, fy] = toScreen(from.x, from.y), K = g.probs.length, R = Math.max(14, 6 * s);
+      const base = (w ? w.head_model : 0) * Math.PI / 180;
+      g.probs.forEach((p, i) => {
+        if (p < 0.05) return;
+        const th = base + ((i * 2 * Math.PI / K + Math.PI) % (2 * Math.PI)) - Math.PI;
+        ctx.strokeStyle = p >= 0.5 ? 'rgba(80,255,80,.9)' : 'rgba(255,255,255,.5)'; ctx.lineWidth = p >= 0.5 ? 3 : 1.5;
+        ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx + R * p * Math.cos(th), fy + R * p * Math.sin(th)); ctx.stroke();
+      });
+    }
+  }
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, Math.max(6, s * 1.2), 0, 7); ctx.stroke();
 }
 
 /* ---------- persistance / export ---------- */
@@ -276,6 +372,8 @@ const Auto = {
     if (saved && saved.format === ZFORMAT) auto = { ...newAuto(), ...saved };
     $('autoBudget').value = auto.budget;
     if (auto.job && auto.job.status === 'running') pollJob();
+    $('autoDebug').checked = localStorage.getItem('mt-auto-debug') === '1';
+    $('autoDebug').addEventListener('change', () => { localStorage.setItem('mt-auto-debug', $('autoDebug').checked ? '1' : '0'); if (!$('autoDebug').checked) A.dbg = null; dirty = true; Auto.ui(); });
     $('autoBudget').addEventListener('change', () => { auto.budget = Math.max(100, +$('autoBudget').value || 20000); $('autoBudget').value = auto.budget; autoSave(); });
     $('btnAutoSeed').onclick = () => { A.arm = !A.arm; $('main').classList.toggle('arm', A.arm); Auto.ui(); };
     Wand.init();
@@ -360,6 +458,7 @@ const Auto = {
     if (e.button !== 0) return;
     if (A.arm || (!auto.graph.nodes.length && !(auto.job && auto.job.status === 'running') && !auto.zones.length)) return startTrace(mx, my);
     if (hit) { activate(hit.zi); A.sel = hit.id; dirty = true; Auto.ui(); return; }
+    if ($('autoDebug').checked) { const tn = findTraceNode(mx, my); if (tn) return debugNode(tn); if (A.dbg) { A.dbg = null; dirty = true; Auto.ui(); } }
     const eh = findEdge(mx, my);
     if (eh) { activate(eh.zi); return splitZoneEdge(eh.h); }
     if (A.sel != null && zone()) return addNode(mx, my, A.sel);   // point suivant, relié au point courant
@@ -462,6 +561,7 @@ const Auto = {
     // départs
     for (const [x, y] of auto.seeds) { const [sx, sy] = toScreen(x, y); if (!vis(sx, sy)) continue; ctx.strokeStyle = '#39c47c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.moveTo(sx - 13, sy); ctx.lineTo(sx + 13, sy); ctx.moveTo(sx, sy - 13); ctx.lineTo(sx, sy + 13); ctx.stroke(); }
     if (mode === 'wand' && auto.job && auto.job.status === 'running' && auto.job.step) Wand.drawCursor(auto.job.cursor);
+    if ($('autoDebug').checked) drawDebug();
     Audit.draw();
   },
   ui() {
@@ -473,6 +573,7 @@ const Auto = {
     const running = j && j.status === 'running', stepping = running && j.step;
     const names = { running: stepping ? (j.paused ? 'pas à pas, en pause — « Pas suivant »' : 'pas à pas, calcule…') : 'en cours', done: 'terminé (plus rien à suivre)', budget: 'arrêté : budget de pas atteint', stopped: 'arrêté à la main', error: 'erreur', lost: 'perdu (serveur redémarré ?)' };
     const reasons = r => r ? Object.entries(r).map(([k, v]) => `${{ end: 'culs-de-sac', junction: 'jonctions', low_confidence: 'perdu', out_of_map: 'bord de carte', max_steps: 'budget' }[k] || k} ${v}`).join(', ') : '';
+    const dbgEl = $('autoDbg'); dbgEl.style.display = $('autoDebug').checked && A.dbg ? '' : 'none'; dbgEl.innerHTML = debugHtml();
     $('autoInfo').innerHTML = j ? `Suivi ${names[j.status] || j.status} — modèle <b>${j.model || ''}</b>${j.steps != null ? ` · ${j.steps} pas, ${j.branches} branches, ${j.queue} en file, ${j.elapsed || 0} s` : ''}` +
       (j.reasons ? `<br>Fins de branches : ${reasons(j.reasons)}` : '') + (j.error ? `<br>${j.error}` : '') : auto.graph.nodes.length ? `Tracé importé (<b>${auto.graph.nodes.length}</b> pts, ${auto.seeds.length} départ(s)) — « Nouveau départ » pour le prolonger.` : 'Aucun tracé : choisissez un modèle et cliquez un point de départ sur une galerie.';
     $('btnAutoStop').disabled = !running;

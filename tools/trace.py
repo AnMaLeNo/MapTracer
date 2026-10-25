@@ -69,8 +69,10 @@ class StopTrace(Exception):
 class Tracer:
     def __init__(self, model, step, K, thr=0.5, img=None, window=128, trace_width=3, map_size=None,
                  max_steps=200000, max_branch_steps=20000, side_sep_deg=20, confirm=2, coast=2, grace=2, verbose=False,
-                 bounds=None, hook=None, refiner=None):
+                 bounds=None, hook=None, refiner=None, debug=False):
         self.model, self.step, self.K, self.thr = model, step, K, thr
+        self.debug = debug          # garde par nœud ce que le modèle a vu et ce que la baguette a fait (self.dbg[id]), pour l'app
+        self.dbg = {}
         self.refiner = refiner      # wand_refine.WandRefiner : recentrage « ballon » et carrefours lus dans la sélection à chaque pas
         self.bounds = bounds        # (x0, y0, x1, y1) : le suivi s'arrête en sortant de la zone
         self.hook = hook            # appelé à chaque pas avec le Tracer (progression) ; peut lever StopTrace
@@ -270,7 +272,7 @@ class Tracer:
             nx, ny = x + self.step * math.cos(heading), y + self.step * math.sin(heading)
             info = None
             if self.refiner is not None:                  # ballon : glisse le point sur l'arc jusqu'au milieu de la galerie
-                nx, ny, heading, info = self.refiner.refine(x, y, nx, ny, heading, self.step, hist_w)
+                nx, ny, heading, info = self.refiner.refine(x, y, nx, ny, heading, self.step, hist_w, debug=self.debug)
             self.steps += 1; n_steps += 1
             if self.map_size and not (0 <= nx < self.map_size[0] and 0 <= ny < self.map_size[1]):
                 reason = 'out_of_map'; break
@@ -289,6 +291,11 @@ class Tracer:
                 self.out.nodes[n].update({k: v for k, v in info.items() if k in ('w', 'wand', 'arms', 'shift')})
                 if info['wand'] == 'ok':
                     hist_w.append(info['w'])
+            if self.debug:
+                self.dbg[n] = {'from': node, 'probs': [round(float(v), 3) for v in probs], 'main_deg': round(math.degrees(main[0])),
+                               'sides_deg': [round(math.degrees(p[0])) for p in sides], 'coasting': coasting,
+                               'pending': [{'deg': round(math.degrees(pd['angle'])), 'count': pd['count'], 'miss': pd['miss'], 'src': sorted(pd['src'])} for pd in pending],
+                               'wand': (info or {}).get('dbg')}
             node, x, y = n, nx, ny
             hist.append(n)
         for pd in pending:                                # direction latérale vue juste avant la fin
@@ -471,6 +478,7 @@ def main():
     ap.add_argument('--wand', action='store_true', help='baguette magique à chaque pas : recentrage « ballon » et carrefours lus dans la sélection (wand_refine.py)')
     ap.add_argument('--wand-radius', type=int, default=96, help='rayon (px) de la fenêtre de la baguette')
     ap.add_argument('--wand-tol-max', type=int, default=64, help='plafond de la tolérance automatique utilisée pour le recentrage')
+    ap.add_argument('--debug', action='store_true', help='écrit trace_debug.json : par nœud, probabilités du modèle et détail du pas de la baguette')
     ap.add_argument('--render-scale', type=int, default=1)
     ap.add_argument('--rng', type=int, default=0)
     ap.add_argument('-v', '--verbose', action='store_true')
@@ -500,7 +508,7 @@ def main():
         refiner = WandRefiner(img, radius=args.wand_radius, tol_max=args.wand_tol_max)
     tr = Tracer(model, args.step, args.sectors, args.thr, img, args.window, trace_width=trace_width, map_size=img.size,
                 coast=args.coast, side_sep_deg=args.side_sep, confirm=args.confirm, verbose=args.verbose, bounds=bbox,
-                refiner=refiner)
+                refiner=refiner, debug=args.debug)
 
     seeds = []
     for s in args.seed or []:
@@ -529,6 +537,8 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     json.dump(out.to_dict(), open(os.path.join(args.out, 'trace_graph.json'), 'w'))
+    if args.debug:
+        json.dump(tr.dbg, open(os.path.join(args.out, 'trace_debug.json'), 'w'))
     g = (proj.get('map') or {}).get('georef')
     if g:
         json.dump(out.to_geojson(g), open(os.path.join(args.out, 'trace_graph.geojson'), 'w'))
