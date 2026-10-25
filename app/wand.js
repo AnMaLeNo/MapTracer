@@ -5,6 +5,7 @@
 const Wand = {
   target: null, res: null, sweep: null, sweepKey: null, proposed: null, jump: null, stop: null, plugs: [], mask: null, tinted: null, tintKey: '',
   tol: +(localStorage.getItem('mt-wand-tol') || 32), auto: localStorage.getItem('mt-wand-auto') !== '0', plug: localStorage.getItem('mt-wand-plug') !== '0',
+  sandwich: +(localStorage.getItem('mt-wand-sandwich') ?? 12),
   busy: false, queued: null, timer: null, error: null,
   radius() { return +$('wandRadius').value || 192; },
   alpha() { return (+$('wandAlpha').value || 60) / 100; },
@@ -16,6 +17,11 @@ const Wand = {
     $('wandTol').addEventListener('input', () => { this.setTol(+$('wandTol').value, true, true); });
     $('wandAuto').addEventListener('change', () => { this.auto = $('wandAuto').checked; localStorage.setItem('mt-wand-auto', this.auto ? '1' : '0'); if (this.auto && this.proposed != null) this.setTol(this.proposed); this.ui(); });
     $('wandRadius').addEventListener('change', () => { this.sweepKey = null; this.request(true); });
+    $('wandSandwich').value = this.sandwich; $('wandSandwichVal').textContent = `${this.sandwich} %`;
+    $('wandSandwich').addEventListener('input', () => {
+      this.sandwich = +$('wandSandwich').value; $('wandSandwichVal').textContent = `${this.sandwich} %`; localStorage.setItem('mt-wand-sandwich', this.sandwich);
+      clearTimeout(this.timer); this.timer = setTimeout(() => { this.sweepKey = null; this.request(true); }, 200);
+    });
     $('wandAlpha').addEventListener('input', () => { dirty = true; });
     $('wandColor').addEventListener('change', () => { dirty = true; });
     $('btnWandStart').onclick = () => this.start();
@@ -63,11 +69,11 @@ const Wand = {
     const url = mapUrl(); if (!url) { this.error = 'Carte locale : le serveur ne la connaît pas (choisissez-la dans la liste).'; this.ui(); return; }
     if (this.busy) { this.queued = this.queued || sweep; return; }
     this.busy = true; this.ui();
-    const { x, y } = this.target, radius = this.radius(), plug = this.plug, key = `${x},${y},${radius},${plug}`;
+    const { x, y } = this.target, radius = this.radius(), plug = this.plug, sandwich = this.sandwich, key = `${x},${y},${radius},${plug},${sandwich}`;
     sweep = sweep || key !== this.sweepKey;
     try {
       const r = await fetch('../api/wand', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                             body: JSON.stringify({ map: url, x, y, tol: this.tol, radius, sweep, plug }) });
+                                             body: JSON.stringify({ map: url, x, y, tol: this.tol, radius, sweep, plug, sandwich }) });
       const res = await r.json();
       if (!r.ok) this.error = res.error || String(r.status);
       else {
