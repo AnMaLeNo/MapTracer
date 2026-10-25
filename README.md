@@ -45,6 +45,7 @@ active. It writes the graph, a GeoJSON and a report (coverage, precision, inters
 | **Auto** | the model traces the whole map; you fix only the regions where it is wrong — each fix becomes a small dataset of hard examples, with full provenance (model, commit, budget) |
 | **Annotation audit** | a trained model replays every human annotation and flags disagreements: forgotten branches, dead ends marked too early |
 | **Magic wand** (proof of concept) | flood-fill from a point with automatic tolerance and **leak plugging**: detects 1–3 px gaps in a line through which the fill would flood the background |
+| **Wand at every step** | in Auto mode, each point placed by the model is re-centred in the gallery (largest inscribed disc on the step arc — a "balloon" between the walls), its width is measured, and gallery arms seen in the selection propose junctions alongside the model's |
 
 ## Results
 
@@ -98,7 +99,7 @@ python3 tools/trace.py data/projects/<project>.maptracer.json maps/<map>.jpg -o 
 ```
 app/          annotation app (manual, assisted, Auto, audit, magic wand) — plain JS
 server.py     serves the app and the model API (/api/predict, /api/trace, /api/audit, /api/wand)
-tools/        oracle.py (states), model.py, train.py, trace.py (tracing loop), audit.py, magic_wand.py,
+tools/        oracle.py (states), model.py, train.py, trace.py (tracing loop), audit.py, magic_wand.py, wand_refine.py,
               export_dataset.py, zones_report.py, make_synth.py (synthetic test map)
 models/       11 trained models, each with weights (float16) and a NOTES.md: recipe, results, limits
 data/         versioned training data: annotated projects and corrected regions

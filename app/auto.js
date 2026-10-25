@@ -180,7 +180,8 @@ async function startTrace(x, y, step = false) {
   if (x < 0 || y < 0 || x >= img.width || y >= img.height) return warn('Hors de la carte.');
   A.arm = false; A.armStep = false; $('main').classList.remove('arm');
   try {
-    const body = { map: url, model: cm.name, x, y, max_steps: auto.budget, graph: auto.graph.nodes.length ? auto.graph : undefined, step: step || undefined };
+    const body = { map: url, model: cm.name, x, y, max_steps: auto.budget, graph: auto.graph.nodes.length ? auto.graph : undefined, step: step || undefined,
+                   wand: $('autoWand').checked || undefined };
     const r = await fetch('../api/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const res = await r.json();
     if (!r.ok) return warn('Suivi impossible : ' + (res.error || r.status));
@@ -401,9 +402,21 @@ const Auto = {
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     }
     const r = Math.max(2.5, Math.min(6, s * 1.3));
+    if ($('autoShowWidth').checked) {              // largeur mesurée par la baguette : disque (« ballon ») à chaque point recentré
+      ctx.fillStyle = 'rgba(0,200,255,.22)';
+      for (const n of G.nodes) {
+        if (!(n.w > 0) || n.wand !== 'ok') continue;
+        const [x, y] = toScreen(n.x, n.y); if (!vis(x, y)) continue;
+        ctx.beginPath(); ctx.arc(x, y, Math.max(1, n.w * s / 2), 0, 7); ctx.fill();
+      }
+    }
     for (const n of G.nodes) {
       const [x, y] = toScreen(n.x, n.y); if (!vis(x, y)) continue;
-      if (n.kind === 'intersection') { ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r * 1.3, 0, 7); ctx.stroke(); }
+      if (n.kind === 'intersection') {
+        ctx.strokeStyle = n.src === 'wand' ? '#00c8ff' : '#ff7a1a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r * 1.3, 0, 7); ctx.stroke();
+        if (n.src === 'both') { ctx.fillStyle = '#00c8ff'; ctx.beginPath(); ctx.arc(x, y, r * 0.6, 0, 7); ctx.fill(); }
+      }
+      else if (n.wand === 'incoherent' && s > 1.5) { ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(x, y, Math.max(2, s * 0.7), 0, 7); ctx.fill(); }
       else if (n.kind === 'end') { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke(); }
       else if (n.kind === 'start') { ctx.fillStyle = '#39c47c'; ctx.beginPath(); ctx.arc(x, y, r * 1.4, 0, 7); ctx.fill(); }
       else if (s > 2.5) { ctx.fillStyle = dim; ctx.beginPath(); ctx.arc(x, y, Math.min(2.5, s * 0.5), 0, 7); ctx.fill(); }

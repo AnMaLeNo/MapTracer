@@ -69,8 +69,9 @@ class StopTrace(Exception):
 class Tracer:
     def __init__(self, model, step, K, thr=0.5, img=None, window=128, trace_width=3, map_size=None,
                  max_steps=200000, max_branch_steps=20000, side_sep_deg=20, confirm=2, coast=2, grace=2, verbose=False,
-                 bounds=None, hook=None):
+                 bounds=None, hook=None, refiner=None):
         self.model, self.step, self.K, self.thr = model, step, K, thr
+        self.refiner = refiner      # wand_refine.WandRefiner : recentrage « ballon » et carrefours lus dans la sélection à chaque pas
         self.bounds = bounds        # (x0, y0, x1, y1) : le suivi s'arrête en sortant de la zone
         self.hook = hook            # appelé à chaque pas avec le Tracer (progression) ; peut lever StopTrace
         self.img, self.W, self.trace_width, self.map_size = img, window, trace_width, map_size
@@ -81,6 +82,7 @@ class Tracer:
         self.queue = deque()
         self.branches = []          # rapport par branche
         self.cursor = None          # dernier point évalué : {'node','x','y','heading','probs'} (pour le pas à pas)
+        self.spawned = {}           # nœud -> caps des branches déjà ouvertes : jamais deux fois la même (boucle sinon)
         self.steps = 0
 
     # ---- modèle --------------------------------------------------------------------------------------------------
@@ -107,10 +109,15 @@ class Tracer:
                     return True
         return False
 
-    def spawn(self, node, angle):
+    def spawn(self, node, angle, src='model'):
         if self.has_edge_toward(node, angle, 2 * self.step):
             return False
-        self.out.nodes[node]['kind'] = 'intersection'
+        if any(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) < math.radians(30) for a in self.spawned.get(node, ())):
+            return False
+        self.spawned.setdefault(node, []).append(angle)
+        p = self.out.nodes[node]
+        p['kind'] = 'intersection'
+        p['src'] = src if p.get('src') in (None, src) else 'both'
         self.queue.append((node, angle))
         return True
 
@@ -118,9 +125,12 @@ class Tracer:
         """Si (x,y) tombe sur le graphe déjà tracé (hors nœuds/arêtes récents de la branche), raccorde et renvoie le nœud."""
         recent = set(hist[-3:])
         excl = {(hist[i], hist[i + 1]) for i in range(max(0, len(hist) - 4), len(hist) - 1)}
-        if len(hist) == 1:                                  # départ de branche : ignore le voisinage (2 pas) du nœud d'origine
-            near = {node} | self.out.adj[node]
+        ox, oy = self.out.xy(hist[0])                       # départ de branche : tant qu'on est près du nœud d'origine, ignore son
+        R = max(3 * self.step, 1.5 * self.out.nodes[hist[0]].get('w', 0) + self.step)   # voisinage (2 sauts et tout nœud à ≤ R :
+        if len(hist) <= 3 or math.hypot(x - ox, y - oy) <= R:                        # dans un carrefour large, le tracé parent
+            near = {node} | self.out.adj[node]                                        # recentré serpente à moins d'un pas)
             near |= {w for m in list(near) for w in self.out.adj[m]}
+            near |= {m for m, p in self.out.nodes.items() if abs(p['x'] - ox) <= R and abs(p['y'] - oy) <= R}
             recent |= near; excl |= {(m, w) for m in near for w in self.out.adj[m]}
         nn = self.out.nearest_node(x, y, exclude=recent)
         if nn and nn[0] <= self.r_join:
@@ -160,15 +170,46 @@ class Tracer:
                 if self.junction(x1, y1, node, [node]) is not None:        # galerie déjà tracée entre-temps
                     self.branches.append({'steps': 0, 'reason': 'junction', 'end_xy': [round(x1, 1), round(y1, 1)]})
                     continue
+                deg0 = self.out.degree(node)
                 self.follow(node, heading)
+                p = self.out.nodes.get(node)                                # branche morte-née : le nœud n'est pas un carrefour
+                if p and p['kind'] == 'intersection' and self.out.degree(node) == deg0 <= 2:
+                    p['kind'] = 'normal'; p.pop('src', None)
         except StopTrace:
             pass
         return self.out
 
+    def _spawn_pending(self, pd):
+        """Ouvre la branche d'une direction latérale confirmée. Vue par la baguette : le carrefour est posé au point où le
+        ballon était le plus gros (centre du carrefour), pas au dernier point où la direction a été vue."""
+        src = 'both' if len(pd['src']) == 2 else next(iter(pd['src']))
+        node = pd['node']
+        if 'wand' in pd['src']:
+            seen = [(n, w) for n, w in pd['seen'] if n in self.out.nodes]
+            if seen:
+                node = max(seen, key=lambda t: t[1])[0]
+        return self.spawn(node, pd['angle'], src)
+
+    def _undo_shortcut(self, hist, j, next_id):
+        """Défait une branche de ≤ 2 pas qui a rejoint le graphe : ses nœuds, son raccord, et le nœud inséré sur l'arête s'il y a lieu."""
+        self.out.remove_edge(hist[-1], j)
+        for n in hist[1:]:
+            for m in list(self.out.adj[n]):
+                self.out.remove_edge(n, m)
+            del self.out.nodes[n]; del self.out.adj[n]
+        if j >= next_id:                                   # nœud créé par split_edge : on recoud l'arête
+            nb = list(self.out.adj[j])
+            if len(nb) == 2:
+                self.out.add_edge(nb[0], nb[1])
+            for m in nb:
+                self.out.remove_edge(j, m)
+            del self.out.nodes[j]; del self.out.adj[j]
+
     def follow(self, node, heading):
         x, y = self.out.xy(node)
         hist = [node]
-        pending = []                                   # {'angle': abs, 'count', 'node'}
+        hist_w = []                                    # largeurs mesurées par la baguette sur cette branche (cohérence)
+        pending = []                                   # {'angle': abs, 'count', 'node', 'miss', 'src': set, 'seen': [(node, w)]}
         reason, n_steps, coasting = 'max_steps', 0, 0
         while n_steps < self.max_branch_steps and self.steps < self.max_steps:
             probs = self.model.predict(x, y, heading, self.crops(x, y, heading))
@@ -192,17 +233,27 @@ class Tracer:
             main = min(pk, key=lambda p: abs(p[0]))
             sides = [p for p in pk if p is not main and
                      abs((p[0] - main[0] + math.pi) % (2 * math.pi) - math.pi) >= self.side_sep]
+            obs = [((heading + rel) % (2 * math.pi), 'model') for rel, _ in sides]
+            ahead = heading + main[0]                 # bras vus par la baguette en ce point, hors continuation choisie par le modèle
+            obs += [(math.radians(a) % (2 * math.pi), 'wand') for a in self.out.nodes[node].get('arms', [])
+                    if abs((math.radians(a) - ahead + math.pi) % (2 * math.pi) - math.pi) >= self.side_sep]
             # suivi des directions latérales : une branche s'ouvre quand une direction vue ≥ `confirm` fois disparaît
             # (`grace` pas sans la voir tolérés) ou à la fin de la branche
             seen = set()
-            for rel, _ in sides:
-                a = (heading + rel) % (2 * math.pi)
+            w_here = self.out.nodes[node].get('w', 0.0)
+            for a, src in obs:
                 for i, pd in enumerate(pending):          # même direction, vue aux pas précédents (pas un autre carrefour plus loin)
-                    if i not in seen and abs((a - pd['angle'] + math.pi) % (2 * math.pi) - math.pi) < math.radians(75) \
+                    if abs((a - pd['angle'] + math.pi) % (2 * math.pi) - math.pi) < math.radians(75) \
                             and math.dist((x, y), self.out.xy(pd['node'])) <= (pd['miss'] + 1) * self.step * 1.25:
-                        pd['angle'], pd['node'], pd['count'], pd['miss'] = a, node, pd['count'] + 1, 0; seen.add(i); break
+                        if i not in seen:
+                            pd['angle'], pd['node'], pd['count'], pd['miss'] = a, node, pd['count'] + 1, 0; seen.add(i)
+                        pd['src'].add(src)
+                        if src == 'wand':
+                            pd['seen'].append((node, w_here))
+                        break
                 else:
-                    pending.append({'angle': a, 'node': node, 'count': 1, 'miss': 0}); seen.add(len(pending) - 1)
+                    pending.append({'angle': a, 'node': node, 'count': 1, 'miss': 0, 'src': {src},
+                                    'seen': [(node, w_here)] if src == 'wand' else []}); seen.add(len(pending) - 1)
             keep = []                                        # le carrefour est posé là où la direction latérale a été vue en dernier
             for i, pd in enumerate(pending):
                 if i in seen:
@@ -210,31 +261,42 @@ class Tracer:
                 elif pd['miss'] < self.grace:
                     pd['miss'] += 1; keep.append(pd)
                 elif pd['count'] >= self.confirm:
-                    self.spawn(pd['node'], pd['angle'])
+                    self._spawn_pending(pd)
                 elif self.verbose:
                     print(f"    latérale vue {pd['count']}× abandonnée à {tuple(round(v) for v in self.out.xy(pd['node']))} ({math.degrees(pd['angle']):.0f}°)")
             pending = keep
             # avance d'un pas
             heading = heading + main[0]
             nx, ny = x + self.step * math.cos(heading), y + self.step * math.sin(heading)
+            info = None
+            if self.refiner is not None:                  # ballon : glisse le point sur l'arc jusqu'au milieu de la galerie
+                nx, ny, heading, info = self.refiner.refine(x, y, nx, ny, heading, self.step, hist_w)
             self.steps += 1; n_steps += 1
             if self.map_size and not (0 <= nx < self.map_size[0] and 0 <= ny < self.map_size[1]):
                 reason = 'out_of_map'; break
             if self.bounds and not (self.bounds[0] <= nx <= self.bounds[2] and self.bounds[1] <= ny <= self.bounds[3]):
                 reason = 'out_of_zone'; break
+            next_id = self.out.next_id
             j = self.junction(nx, ny, node, hist)
             if j is not None:
-                reason = 'junction'; break
+                reason = 'junction'
+                if n_steps <= 2:                                   # raccourci de ≤ 2 pas entre deux galeries déjà tracées : artefact
+                    self._undo_shortcut(hist, j, next_id); reason = 'shortcut'
+                break
             n = self.out.add_node(nx, ny)
             self.out.add_edge(node, n)
+            if info:
+                self.out.nodes[n].update({k: v for k, v in info.items() if k in ('w', 'wand', 'arms', 'shift')})
+                if info['wand'] == 'ok':
+                    hist_w.append(info['w'])
             node, x, y = n, nx, ny
             hist.append(n)
         for pd in pending:                                # direction latérale vue juste avant la fin
             if pd['count'] >= self.confirm:
-                self.spawn(pd['node'], pd['angle'])
+                self._spawn_pending(pd)
         self.branches.append({'steps': n_steps, 'reason': reason, 'end_xy': [round(x, 1), round(y, 1)]})
         if self.verbose:
-            print(f"  branche {len(self.branches)}: {n_steps} pas, {reason} à ({x:.0f},{y:.0f}), file {len(self.queue)}")
+            print(f"  branche {len(self.branches)}: {n_steps} pas, {reason} à ({x:.0f},{y:.0f}), file {len(self.branches)}")
 
 
 # ---- évaluation ----------------------------------------------------------------------------------------------------
@@ -406,6 +468,9 @@ def main():
     ap.add_argument('--noise-deg', type=float, default=0.0, help='bruit gaussien sur les directions de l’oracle')
     ap.add_argument('--drop', type=float, default=0.0, help='probabilité d’oublier une direction (oracle)')
     ap.add_argument('--snap', type=float, help='oracle : distance max à l’axe avant d’être « perdu » (défaut 2×pas)')
+    ap.add_argument('--wand', action='store_true', help='baguette magique à chaque pas : recentrage « ballon » et carrefours lus dans la sélection (wand_refine.py)')
+    ap.add_argument('--wand-radius', type=int, default=96, help='rayon (px) de la fenêtre de la baguette')
+    ap.add_argument('--wand-tol-max', type=int, default=64, help='plafond de la tolérance automatique utilisée pour le recentrage')
     ap.add_argument('--render-scale', type=int, default=1)
     ap.add_argument('--rng', type=int, default=0)
     ap.add_argument('-v', '--verbose', action='store_true')
@@ -429,8 +494,13 @@ def main():
         L = mt['lookahead']
         print(f"modèle {args.model} : fenêtre {args.window}, pas {args.step}, {args.sectors} secteurs, "
               f"époque {mt.get('epoch')}, appareil {model.device}")
+    refiner = None
+    if args.wand:
+        from wand_refine import WandRefiner
+        refiner = WandRefiner(img, radius=args.wand_radius, tol_max=args.wand_tol_max)
     tr = Tracer(model, args.step, args.sectors, args.thr, img, args.window, trace_width=trace_width, map_size=img.size,
-                coast=args.coast, side_sep_deg=args.side_sep, confirm=args.confirm, verbose=args.verbose, bounds=bbox)
+                coast=args.coast, side_sep_deg=args.side_sep, confirm=args.confirm, verbose=args.verbose, bounds=bbox,
+                refiner=refiner)
 
     seeds = []
     for s in args.seed or []:
@@ -469,6 +539,13 @@ def main():
     rep.update({'steps': tr.steps, 'branches': len(tr.branches), 'branch_ends': reasons, 'branch_list': tr.branches,
                 'seeds': [[round(x, 1), round(y, 1)] for x, y, _ in seeds], 'coverage_by_seed': cov_by_seed,
                 'params': {k: v for k, v in vars(args).items() if k not in ('project', 'image', 'out')}})
+    if refiner is not None:
+        rep['wand'] = refiner.summary()
+        rep['wand']['intersections_by_src'] = {}
+        for p in out.nodes.values():
+            if p['kind'] == 'intersection':
+                k = p.get('src', 'model'); rep['wand']['intersections_by_src'][k] = rep['wand']['intersections_by_src'].get(k, 0) + 1
+        print(f"baguette : {rep['wand']}")
     json.dump(rep, open(os.path.join(args.out, 'report.json'), 'w'), indent=1, ensure_ascii=False)
     render(img, ref, out, os.path.join(args.out, 'debug.png'), scale=args.render_scale)
     print(f"{tr.steps} pas, {len(tr.branches)} branches {reasons} ; {len(seeds)} départ(s) "

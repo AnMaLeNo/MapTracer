@@ -101,6 +101,8 @@
   <section class="mode-auto">
     <h2>Tracé automatique</h2>
     <label class="row">Budget (pas max) <input type="number" id="autoBudget" min="100" max="500000" step="1000" value="20000"></label>
+    <label class="row"><input type="checkbox" id="autoWand" checked title="À chaque pas, la baguette magique (tolérance automatique) colorie la galerie ; le point posé par le modèle glisse sur son arc (distance = le pas) jusqu'au milieu de la galerie (plus gros disque qui tient entre les murs) ; les bras de galerie vus autour du point proposent des carrefours"> Baguette à chaque pas : recentrage « ballon » + carrefours</label>
+    <label class="row"><input type="checkbox" id="autoShowWidth" checked> Afficher la largeur mesurée (disques cyan) — carrefour <span style="color:#ff7a1a">orange</span> = modèle, <span style="color:#00c8ff">cyan</span> = baguette, orange à cœur cyan = les deux ; point <span style="color:#ffd166">jaune</span> = sélection incohérente, point du modèle gardé</label>
     <div class="btns">
       <button id="btnAutoSeed" title="Puis cliquez sur la carte">Nouveau départ : cliquer sur la carte</button>
       <button id="btnAutoStop" disabled>Arrêter le suivi</button>

@@ -199,6 +199,63 @@ sur une salle ou une galerie large (Cabi-bis, salle des fêtes) elle remplit la 
 JPEG impose une tolérance ≥ 8–16 avant que quoi que ce soit ne se sélectionne. Distinguer « suit la galerie » de « inonde le fond »
 par la largeur plutôt que par l'aire est la piste à vérifier.
 
+## Baguette à chaque pas : recentrage « ballon » et carrefours (`tools/wand_refine.py`, option `wand` de `/api/trace`, `trace.py --wand`)
+
+Combinaison du suivi par le modèle et de la baguette magique. Dans le mode Auto, la case « Baguette à chaque pas » (cochée par
+défaut) active, pour chaque point posé par le modèle (jamais le départ) :
+
+1. **Sélection** — la baguette (tolérance automatique, plafonnée à 64, fenêtre de rayon 96 px) colorie le vide de galerie autour
+   du point ; la sélection est réutilisée tant que le point suivant reste dedans et à plus de 24 px du bord de la fenêtre
+   (en pratique une analyse tous les ~10 pas). La référence couleur est le ton clair dominant du voisinage (médiane, arrondie
+   à 4) et non le pixel cliqué : deux clics voisins donnent la même sélection.
+2. **Ballon** — dans la sélection, la transformée de distance D(p) est le rayon du plus grand disque centré en p qui tient entre
+   les murs. Le nouveau point est articulé au précédent à distance fixe (le pas) ; il glisse sur cet arc (± 45° autour du cap du
+   modèle) jusqu'au **maximum local de D le plus proche du cap du modèle** : le ballon gonflé touche les deux parois, le point
+   est au milieu de la galerie, et 2·D est la largeur locale (champ `w` du nœud, disques cyan dans l'app). On prend le maximum
+   local le plus proche du cap, pas le maximum absolu : au départ d'une branche latérale, le plus gros disque est au centre du
+   carrefour, derrière, et le point y retomberait (c'était le premier bug : branches de 2 pas finissant en « junction »).
+   Le modèle garde le choix de la direction ; la baguette ne corrige que la position.
+3. **Carrefours** — deux anneaux (rayons ≈ 2 et 3 demi-largeurs) autour du point recentré ; chaque arc d'anneau dans la sélection
+   d'ouverture ≥ 15°, présent sur les deux anneaux dans la même direction (± 30°), est un **bras** (champ `arms`, degrés). Le bras
+   arrière (± 60° du cap inverse) est ignoré ; les autres, à ≥ 20° de la continuation choisie par le modèle, entrent dans la même
+   file de directions latérales que celles du modèle (confirmées sur 2 pas consécutifs). Quand une direction vue par la baguette
+   ouvre une branche, le carrefour est posé **au point où le ballon était le plus gros** parmi ceux où elle a été vue (le centre
+   du carrefour) et non au dernier point où elle a été vue. Le nœud porte `src` = `model` / `wand` / `both` (orange / cyan /
+   orange à cœur cyan dans l'app). Une branche morte-née (aucun pas conservé) ne laisse pas de carrefour ; une même direction
+   n'est jamais ouverte deux fois depuis le même nœud (sinon boucle infinie : c'était le second bug).
+4. **Garde-fou** — si le point du modèle n'est pas dans la sélection (trait, texte, lavis : `wand` = `off`) ou si la largeur
+   mesurée est sans rapport avec celle des 12 derniers pas de la branche (> 3× la médiane et > médiane + 6 px : `incoherent`,
+   point jaune), le point du modèle est gardé tel quel. Ce n'est pas encore une comparaison des sélections entre points
+   voisins, seulement des largeurs.
+
+```bash
+# même zone de validation, avec et sans baguette (couverture / précision / carrefours + résumé de la baguette)
+python3 tools/trace.py data/projects/nexus_alkhemia_2011.maptracer.json maps/nexus_alkhemia_2011.jpg -o /tmp/ho1 \
+        --model models/v6-ft/model.pt --bbox 4200,3200,5800,3600 --seed auto
+python3 tools/trace.py ... -o /tmp/ho1-wand --wand          # --wand-radius 96 --wand-tol-max 64
+```
+
+Premier essai (v6-ft, départs `auto`, CPU) — voir la PR pour les planches :
+
+| zone | sans baguette | avec baguette |
+|---|---|---|
+| ho1 (projet 01, `4200,3200,5800,3600`) | couverture 97,6 %, précision 57,5 %, carrefours 14/15 (25 trouvés), 1 246 pas | couverture 83,4 %, précision 97,6 %, carrefours 10/15 (18 trouvés), 678 pas |
+| ho2 (projet 0202, `3000,2500,4100,2900`) | couverture 98,1 %, précision 58,9 %, carrefours 15/20 (42 trouvés), 1 927 pas | couverture 74,0 %, précision 54,3 %, carrefours 15/20 (40 trouvés), 1 675 pas |
+
+Lecture : le recentrage fait ce qu'on attend (tracé au milieu, plus de zigzag ni de virage coupé ; décalage moyen 0,3 px par
+pas, 94 % des pas recentrés, 0–5 incohérents) et sur ho1 la précision monte parce que le tracé ne sort plus des galeries
+annotées. Mais la **couverture baisse**, et toujours de la même façon : le modèle perd confiance à l'entrée d'une galerie
+(« low_confidence » après 2–4 pas) là où la baguette voit un couloir net — ho1 : la galerie x 4483–4516, y 3378–3504, dont
+l'entrée nord est abandonnée après 4 pas (sans baguette, elle n'était atteinte que par un détour non annoté) ; ho2 : toute
+l'« av. de l'est » (x 3331–3577, lavis bleu, galerie large) où le point recentré au milieu de la galerie large est un état que le
+modèle connaît mal (3 pas puis abandon), alors que le point du modèle, collé au bord, passait. Le reste de l'écart est en
+cascade de ces deux entrées. Les réglages de carrefour (bras qui doivent continuer au-delà de l'anneau, raccourcis de ≤ 2 pas
+défaits, voisinage du nœud d'origine ignoré sur R = 1,5 largeur) font varier la couverture de ho2 de 98 % à 74 % d'une version
+à l'autre, pour quelques branches ouvertes ou non à ces mêmes endroits : les chiffres de couverture d'une seule graine ne
+départagent pas ces variantes, le tracé à l'écran si. Piste suivante évidente : quand le modèle ne voit rien mais que la
+baguette voit un seul bras devant, avancer le long de ce bras (aujourd'hui on avance tout droit 2 pas puis on s'arrête) ; et
+réentraîner avec des points recentrés, puisque le modèle n'a appris que des points posés à la main, souvent hors du milieu.
+
 ## Détecteur d'anomalies d'annotation (`tools/audit.py`, `/api/audit`, onglet « Anomalies »)
 
 Un modèle déjà entraîné rejoue chaque point annoté — projet du mode Tracer ou zones du mode Auto — et ses désaccords
